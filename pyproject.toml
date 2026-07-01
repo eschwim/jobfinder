@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobfinder"
+version = "0.1.0"
+description = "Poll job boards and push alerts for postings matching your criteria"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Eric Schwimmer"}]
+requires-python = ">=3.10"
+dependencies = [
+    "python-jobspy>=1.1.79",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,45 @@
+# jobfinder configuration — copy to config.yaml and edit to match what you want.
+# Sites: indeed, linkedin, google, zip_recruiter, glassdoor
+# (Indeed is the most reliable; LinkedIn rate-limits aggressively, keep results_wanted modest.)
+#
+# LinkedIn geo-scopes searches to the posting's tagged location, and multi-location
+# postings are often tagged at state level — consider adding state-scoped searches
+# (e.g. location: "Washington, United States") alongside city ones.
+# fetch_descriptions costs one extra LinkedIn request per job (keep results_wanted
+# modest) but lets salary ranges be parsed out of the description text.
+#
+# google + zip_recruiter broken upstream as of 2026-07 (Google: cursor not found;
+# ZipRecruiter: Cloudflare 403). Re-add after a python-jobspy update fixes them.
+
+searches:
+  - name: platform-eng
+    sites: [indeed, linkedin]
+    search_term: "platform engineer"
+    location: "San Francisco, CA"
+    hours_old: 4          # slightly more than the timer interval; overlap is deduped
+    results_wanted: 30
+    country_indeed: USA
+    fetch_descriptions: true
+    # google_search_term: optional override; auto-built from search_term + location
+
+filters:
+  # Regexes, any-match. Leave a list empty to skip that check.
+  title_include: ["(?i)(platform|infrastructure|site reliability|sre)"]
+  title_exclude: ["(?i)(intern|junior)"]
+  # Whole-word, case-insensitive company names to skip.
+  employer_exclude: ["Initech"]
+  # Case-insensitive regexes matched against the posting location; "remote" also
+  # accepts postings flagged remote. ',\s*(ca|wa)\b' catches "Oakland, CA" style.
+  locations_allow: ["san francisco", "remote"]
+  salary:
+    min: 150000           # yearly; hourly/monthly postings are normalized before comparing
+    currency: USD
+    keep_unlisted: true   # postings with no salary data still alert, flagged "salary unlisted"
+
+notify:
+  # Enable one or both. pushover needs PUSHOVER_* in .env; email needs SMTP_* / EMAIL_TO.
+  channels: [pushover, email]
+  digest_threshold: 5     # pushover only: more matches than this in one run -> single digest push
+                          # (email always sends one message per run with all matches)
+  health_alerts: true     # low-priority notification when a site looks broken
+  empty_runs_before_alert: 3
