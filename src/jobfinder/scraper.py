@@ -28,14 +28,18 @@ def _row_to_job(row: dict) -> Job:
     url = _clean(row.get("job_url")) or ""
     min_amount = _clean(row.get("min_amount"))
     max_amount = _clean(row.get("max_amount"))
+    title = str(_clean(row.get("title")) or "")
+    location = _clean(row.get("location"))
     job = Job(
         id=str(_clean(row.get("id")) or url),
-        title=str(_clean(row.get("title")) or ""),
+        title=title,
         company=str(_clean(row.get("company")) or ""),
         site=str(_clean(row.get("site")) or ""),
         url=url,
-        location=_clean(row.get("location")),
-        is_remote=bool(_clean(row.get("is_remote"))),
+        location=location,
+        # JobSpy's is_remote flag is a text heuristic that trips on phrases like
+        # "remote sensing" in fetched descriptions — trust only title/location.
+        is_remote="remote" in f"{title} {location or ''}".lower(),
         min_amount=float(min_amount) if min_amount is not None else None,
         max_amount=float(max_amount) if max_amount is not None else None,
         interval=_clean(row.get("interval")),

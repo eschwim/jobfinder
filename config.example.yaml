@@ -4,7 +4,8 @@
 #
 # LinkedIn geo-scopes searches to the posting's tagged location, and multi-location
 # postings are often tagged at state level — consider adding state-scoped searches
-# (e.g. location: "Washington, United States") alongside city ones.
+# (e.g. location: "Washington State, United States") alongside city ones. Beware
+# ambiguous names: LinkedIn resolves "Washington, United States" to Washington DC.
 # fetch_descriptions costs one extra LinkedIn request per job (keep results_wanted
 # modest) but lets salary ranges be parsed out of the description text.
 #
