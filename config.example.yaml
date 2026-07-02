@@ -22,6 +22,17 @@ searches:
     country_indeed: USA
     fetch_descriptions: true
     # google_search_term: optional override; auto-built from search_term + location
+  # Nationwide-remote jobs are tagged "United States", which geo-scoped searches
+  # never return — add a remote search to catch them. is_remote uses the board's
+  # structured remote facet (LinkedIn only; Indeed ignores it when hours_old is set).
+  - name: platform-eng-remote
+    sites: [linkedin]
+    search_term: "platform engineer"
+    location: "United States"
+    is_remote: true
+    hours_old: 4
+    results_wanted: 30
+    fetch_descriptions: true
 
 filters:
   # Regexes, any-match. Leave a list empty to skip that check.

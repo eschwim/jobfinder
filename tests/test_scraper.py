@@ -20,6 +20,12 @@ class TestIsRemote:
     def test_remote_in_title(self):
         assert _row_to_job(_row(title="Platform Engineer - Remote")).is_remote is True
 
+    def test_remote_search_facet_is_trusted(self):
+        # Jobs from an is_remote search were filtered by the board's structured
+        # remote facet, so they count as remote even when tagged "United States".
+        job = _row_to_job(_row(location="United States"), assume_remote=True)
+        assert job.is_remote is True
+
 
 class TestSalaryEnrichment:
     def test_salary_parsed_from_description(self):

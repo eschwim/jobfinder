@@ -25,6 +25,7 @@ class SearchSpec:
     country_indeed: str = "USA"
     google_search_term: str | None = None
     fetch_descriptions: bool = False
+    is_remote: bool = False
 
 
 @dataclass

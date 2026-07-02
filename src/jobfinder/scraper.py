@@ -24,7 +24,7 @@ def _clean(value):
     return value
 
 
-def _row_to_job(row: dict) -> Job:
+def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
     url = _clean(row.get("job_url")) or ""
     min_amount = _clean(row.get("min_amount"))
     max_amount = _clean(row.get("max_amount"))
@@ -38,8 +38,9 @@ def _row_to_job(row: dict) -> Job:
         url=url,
         location=location,
         # JobSpy's is_remote flag is a text heuristic that trips on phrases like
-        # "remote sensing" in fetched descriptions — trust only title/location.
-        is_remote="remote" in f"{title} {location or ''}".lower(),
+        # "remote sensing" in fetched descriptions — trust only title/location,
+        # or the search itself having filtered on the board's remote facet.
+        is_remote=assume_remote or "remote" in f"{title} {location or ''}".lower(),
         min_amount=float(min_amount) if min_amount is not None else None,
         max_amount=float(max_amount) if max_amount is not None else None,
         interval=_clean(row.get("interval")),
@@ -74,8 +75,14 @@ def fetch_jobs(search: SearchSpec) -> tuple[list[Job], dict[str, int]]:
             hours_old=search.hours_old,
             country_indeed=search.country_indeed,
             linkedin_fetch_description=search.fetch_descriptions,
+            is_remote=search.is_remote,
             verbose=0,
         )
+        if search.is_remote and site == "indeed" and search.hours_old:
+            # Indeed ignores the is_remote facet when hours_old is set, so the
+            # search would silently return on-site jobs marked remote.
+            log.warning("search %r: indeed drops is_remote when hours_old is set; "
+                        "results may include non-remote jobs", search.name)
         if site == "google":
             # Google's scraper matches only on this literal query string, not the structured params.
             kwargs["google_search_term"] = search.google_search_term or (
@@ -88,8 +95,14 @@ def fetch_jobs(search: SearchSpec) -> tuple[list[Job], dict[str, int]]:
             log.exception("search %r: %s scrape failed", search.name, site)
             counts[site] = counts.get(site, 0)
             continue
+        # Trust the remote facet only where the board actually applied it:
+        # google matches on the query string alone, and indeed drops the facet
+        # when hours_old is set.
+        facet_applied = search.is_remote and site not in ("google",) and not (
+            site == "indeed" and search.hours_old
+        )
         rows = df.to_dict("records") if df is not None else []
         counts[site] = counts.get(site, 0) + len(rows)
-        jobs.extend(_row_to_job(row) for row in rows)
+        jobs.extend(_row_to_job(row, assume_remote=facet_applied) for row in rows)
         log.info("search %r: %s returned %d jobs", search.name, site, len(rows))
     return jobs, counts
