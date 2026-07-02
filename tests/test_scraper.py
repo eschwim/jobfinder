@@ -26,6 +26,31 @@ class TestIsRemote:
         job = _row_to_job(_row(location="United States"), assume_remote=True)
         assert job.is_remote is True
 
+    def test_hybrid_description_overrides_facet(self):
+        # LinkedIn's remote facet sometimes returns hybrid postings
+        # (e.g. linkedin.com/jobs/view/4435019581, "Hybrid" in Brooklyn NY).
+        job = _row_to_job(
+            _row(location="Brooklyn, NY",
+                 description="We've adopted a flexible hybrid working environment "
+                             "(2-3 days a week in the office depending on the role)."),
+            assume_remote=True)
+        assert job.is_remote is False
+
+    def test_hybrid_cloud_description_does_not_override_facet(self):
+        job = _row_to_job(
+            _row(location="United States",
+                 description="You will operate our hybrid cloud environment across "
+                             "AWS and on-prem datacenters."),
+            assume_remote=True)
+        assert job.is_remote is True
+
+    def test_remote_in_title_beats_hybrid_description(self):
+        job = _row_to_job(
+            _row(title="Platform Engineer (Remote)",
+                 description="Some teams follow a hybrid schedule."),
+            assume_remote=True)
+        assert job.is_remote is True
+
 
 class TestSalaryEnrichment:
     def test_salary_parsed_from_description(self):

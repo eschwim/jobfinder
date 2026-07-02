@@ -1,7 +1,8 @@
 import re
 
 from jobfinder.config import Filters, SalaryFilter
-from jobfinder.filters import Job, evaluate, parse_salary_text, yearly_salary_range
+from jobfinder.filters import (Job, describes_hybrid, evaluate, parse_salary_text,
+                               yearly_salary_range)
 
 
 def _loc(*exprs) -> list[re.Pattern]:
@@ -128,3 +129,23 @@ class TestParseSalaryText:
 
     def test_no_text(self):
         assert parse_salary_text("We offer competitive compensation.") is None
+
+
+class TestDescribesHybrid:
+    def test_hybrid_work_arrangements(self):
+        for text in [
+            "We've adopted a flexible hybrid working environment",
+            "This role is hybrid",
+            "hybrid schedule with 3 days in the office",
+            "you'll spend 2 days per week on-site",
+            "expected in the office 3 days a week... 3 days at our office",
+        ]:
+            assert describes_hybrid(text), text
+
+    def test_hybrid_cloud_is_not_a_work_arrangement(self):
+        for text in [
+            "experience operating hybrid cloud environments",
+            "hybrid on-prem/AWS infrastructure",
+            "our office has an on-site gym",
+        ]:
+            assert not describes_hybrid(text), text

@@ -1,5 +1,5 @@
 from jobfinder.filters import Job, Match
-from jobfinder.notify import email_bodies, salary_str
+from jobfinder.notify import email_bodies, location_str, salary_str
 
 
 def _match(**kwargs) -> Match:
@@ -38,3 +38,13 @@ class TestSalaryStr:
 
     def test_unlisted(self):
         assert salary_str(Job(id="1", title="t", company="c"), unlisted=True) == "salary unlisted"
+
+
+class TestLocationStr:
+    def test_remote_job_labeled_remote_not_city(self):
+        job = Job(id="1", title="T", company="C", location="New York, NY", is_remote=True)
+        assert location_str(job) == "Remote"
+
+    def test_onsite_job_shows_city(self):
+        job = Job(id="1", title="T", company="C", location="Seattle, WA")
+        assert location_str(job) == "Seattle, WA"

@@ -38,10 +38,17 @@ def salary_str(job: Job, unlisted: bool) -> str:
     return text.strip()
 
 
+def location_str(job: Job) -> str:
+    # Remote postings are often tagged with a hiring-hub city ("New York, NY"),
+    # which reads as misleading in an alert — label them plainly as remote.
+    if job.is_remote:
+        return "Remote"
+    return job.location or "location n/a"
+
+
 def _match_summary(m: Match) -> str:
     job = m.job
-    location = job.location or ("Remote" if job.is_remote else "location n/a")
-    return f"{job.title} @ {job.company} — {location} — {salary_str(job, m.salary_unlisted)}"
+    return f"{job.title} @ {job.company} — {location_str(job)} — {salary_str(job, m.salary_unlisted)}"
 
 
 def email_bodies(matches: list[Match]) -> tuple[str, str]:
@@ -91,7 +98,7 @@ class PushoverChannel:
         if len(matches) <= digest_threshold:
             for m in matches:
                 job = m.job
-                parts = [job.location or ("Remote" if job.is_remote else "location n/a"),
+                parts = [location_str(job),
                          salary_str(job, m.salary_unlisted),
                          f"via {job.site}"]
                 self._push(

@@ -8,7 +8,7 @@ import pandas as pd
 from jobspy import scrape_jobs
 
 from .config import SearchSpec
-from .filters import Job, parse_salary_text
+from .filters import Job, describes_hybrid, parse_salary_text
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,12 @@ def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
     max_amount = _clean(row.get("max_amount"))
     title = str(_clean(row.get("title")) or "")
     location = _clean(row.get("location"))
+    description = _clean(row.get("description"))
+    text_remote = "remote" in f"{title} {location or ''}".lower()
+    # LinkedIn's remote facet (f_WT=2) sometimes returns hybrid postings; when the
+    # fetched description clearly describes a hybrid arrangement, the facet loses.
+    if assume_remote and not text_remote and description and describes_hybrid(str(description)):
+        assume_remote = False
     job = Job(
         id=str(_clean(row.get("id")) or url),
         title=title,
@@ -40,7 +46,7 @@ def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
         # JobSpy's is_remote flag is a text heuristic that trips on phrases like
         # "remote sensing" in fetched descriptions — trust only title/location,
         # or the search itself having filtered on the board's remote facet.
-        is_remote=assume_remote or "remote" in f"{title} {location or ''}".lower(),
+        is_remote=assume_remote or text_remote,
         min_amount=float(min_amount) if min_amount is not None else None,
         max_amount=float(max_amount) if max_amount is not None else None,
         interval=_clean(row.get("interval")),
@@ -49,7 +55,6 @@ def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
         date_posted=str(_clean(row.get("date_posted")) or "") or None,
     )
     if job.min_amount is None and job.max_amount is None:
-        description = _clean(row.get("description"))
         parsed = parse_salary_text(str(description)) if description else None
         if parsed:
             job.min_amount, job.max_amount = parsed

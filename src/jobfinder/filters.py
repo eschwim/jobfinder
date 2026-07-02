@@ -90,6 +90,22 @@ def _salary_state(job: Job, filters: Filters) -> str:
     return "ok"
 
 
+# Phrases that describe a hybrid/in-office work arrangement. Deliberately narrow:
+# "hybrid" alone would trip on "hybrid cloud", which is everywhere in infra jobs.
+_HYBRID_HINTS = re.compile(
+    r"hybrid\s+(?:work(?:ing|place)?|role|schedule|model|position|arrangement|environment|setup)"
+    r"|(?:role|position|schedule|arrangement)\s+(?:is|will\s+be)\s+hybrid"
+    r"|days?\s+(?:a\s+week\s+|per\s+week\s+)?(?:in|at)\s+(?:the\s+|our\s+)?office"
+    r"|days?\s+(?:a\s+week\s+|per\s+week\s+)?on-?site",
+    re.IGNORECASE,
+)
+
+
+def describes_hybrid(text: str) -> bool:
+    """True if free text describes a hybrid/in-office arrangement (not "hybrid cloud")."""
+    return bool(_HYBRID_HINTS.search(text.replace("\\", "")))
+
+
 # "$208,000 - $333,500", "208,000 USD - 333,500 USD", "$61,900.00 to $141,000.00",
 # "$150k-200k", "$75 to $90 per hour"
 _AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*[kK]\b|\d+(?:\.\d+)?"
