@@ -63,6 +63,9 @@ class AppConfig:
     notify: NotifyConfig
     pushover_token: str | None
     pushover_user: str | None
+    # Suppress reposts of an already-alerted role (same company+title) for this
+    # many days after its last sighting; 0 disables repost detection.
+    repost_window_days: int = 60
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
     smtp_user: str | None = None
@@ -138,11 +141,17 @@ def load_config(path: Path) -> AppConfig:
     if not notify.channels:
         raise ConfigError("notify.channels must list at least one channel")
 
+    repost_window_days = raw.get("repost_window_days", 60)
+    if not isinstance(repost_window_days, int) or isinstance(repost_window_days, bool) \
+            or repost_window_days < 0:
+        raise ConfigError("repost_window_days must be a non-negative integer")
+
     _load_dotenv(path.resolve().parent / ".env")
     return AppConfig(
         searches=searches,
         filters=filters,
         notify=notify,
+        repost_window_days=repost_window_days,
         pushover_token=os.environ.get("PUSHOVER_TOKEN"),
         pushover_user=os.environ.get("PUSHOVER_USER"),
         smtp_host=os.environ.get("SMTP_HOST", "smtp.gmail.com"),

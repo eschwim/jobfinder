@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info("test notification sent")
         return 0
 
-    store = Store(args.db)
+    store = Store(args.db, repost_window_days=cfg.repost_window_days)
     matches: list[Match] = []
     site_totals: dict[str, int] = {}
 
@@ -62,7 +62,12 @@ def main(argv: list[str] | None = None) -> int:
             for site, count in counts.items():
                 site_totals[site] = site_totals.get(site, 0) + count
             for job in jobs:
-                if store.is_seen(job.id):
+                if store.is_seen(job):
+                    # Record repost sightings too, so an actively reposted role
+                    # keeps its repost window fresh instead of re-alerting
+                    # every window's end.
+                    if not args.dry_run:
+                        store.mark_seen(job)
                     continue
                 match = evaluate(job, cfg.filters)
                 if match:

@@ -55,3 +55,8 @@ notify:
                           # (email always sends one message per run with all matches)
   health_alerts: true     # low-priority notification when a site looks broken
   empty_runs_before_alert: 3
+
+# Boards (LinkedIn especially) repost the same role under a fresh job id, often
+# tagged to a different metro. A job whose company+title already alerted within
+# this many days of its last sighting is suppressed as a repost. 0 disables.
+repost_window_days: 60
