@@ -3,14 +3,42 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 
 from .config import SearchSpec
 from .filters import Job, describes_hybrid, parse_salary_text
 
 log = logging.getLogger(__name__)
+
+_BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64; rv:124.0) "
+               "Gecko/20100101 Firefox/124.0")
+
+
+def _fetch_linkedin_description(url: str) -> str | None:
+    """Fetch a LinkedIn job page's description text directly.
+
+    JobSpy's per-job detail fetch swallows timeouts, 429s, and signup-wall
+    redirects and silently returns no description, which would make the job's
+    salary look unlisted. Guest access to the job page usually still works,
+    so retry once ourselves.
+    """
+    try:
+        resp = requests.get(url, headers={"User-Agent": _BROWSER_UA},
+                            timeout=10, allow_redirects=True)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
+    if "linkedin.com/signup" in resp.url:
+        return None
+    div = BeautifulSoup(resp.text, "html.parser").find(
+        "div", class_=lambda x: x and "show-more-less-html__markup" in x
+    )
+    return div.get_text(" ", strip=True) if div else None
 
 
 def _clean(value):
@@ -107,6 +135,16 @@ def fetch_jobs(search: SearchSpec) -> tuple[list[Job], dict[str, int]]:
             site == "indeed" and search.hours_old
         )
         rows = df.to_dict("records") if df is not None else []
+        if site == "linkedin" and search.fetch_descriptions:
+            missing = [r for r in rows
+                       if _clean(r.get("description")) is None and _clean(r.get("job_url"))]
+            for row in missing:
+                time.sleep(1)  # be gentle; jobspy already hit LinkedIn hard this run
+                row["description"] = _fetch_linkedin_description(str(row["job_url"]))
+            if missing:
+                recovered = sum(1 for r in missing if r["description"])
+                log.info("search %r: retried %d missing linkedin descriptions, recovered %d",
+                         search.name, len(missing), recovered)
         counts[site] = counts.get(site, 0) + len(rows)
         jobs.extend(_row_to_job(row, assume_remote=facet_applied) for row in rows)
         log.info("search %r: %s returned %d jobs", search.name, site, len(rows))
