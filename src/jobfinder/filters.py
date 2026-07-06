@@ -107,13 +107,48 @@ def describes_hybrid(text: str) -> bool:
 
 
 # "$208,000 - $333,500", "208,000 USD - 333,500 USD", "$61,900.00 to $141,000.00",
-# "$150k-200k", "$75 to $90 per hour", "between $104,400 and $171,000/year"
+# "$150k-200k", "$75 to $90 per hour", "between $104,400 and $171,000/year",
+# "USD $105,230.00/Yr. - USD $111,000.00/Yr.", "$55.00/hr-$60.00/hr", "$100-115k"
 _AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*[kK]\b|\d+(?:\.\d+)?"
+_INTERVAL_HINT = (r"/\s*(?:yr|year|hr|hour|mo|month|wk|week)\b\.?"
+                  r"|per\s+(?:year|hour|month|week)|annual(?:ly)?|hourly")
+
+
+def _amount_side(n: int) -> str:
+    """One side of a salary range: [USD] [$] amount [USD] [/yr | per year | ...]."""
+    return (rf"(?P<cur{n}>USD\s*)?(?P<dol{n}>\$\s*)?(?P<amt{n}>{_AMOUNT})"
+            rf"\s*(?P<cur{n}b>USD\b)?\s*(?P<ivl{n}>{_INTERVAL_HINT})?")
+
+
+# The bare-whitespace separator ("$300,000 $450,000 Base") only pairs directly
+# adjacent amounts, so unrelated dollar figures in running text don't combine.
 _SALARY_RANGE = re.compile(
-    rf"(\$?)\s*({_AMOUNT})\s*(USD)?"
-    r"\s*(?:-|–|—|\bto\b|\band\b)\s*"
-    rf"(\$?)\s*({_AMOUNT})\s*(USD)?"
+    _amount_side(1) + r"(?:\s*(?:-|–|—|\bto\b|\band\b)\s*|\s+)" + _amount_side(2),
+    re.IGNORECASE,
 )
+
+# Ranges written as labeled endpoints with no separator between them:
+# "Minimum Salary: $120,000 Maximum Salary: $175,000",
+# "Minimum Rate $100,000 Annually Maximum Rate $245,000 Annually",
+# "Salary Min : $ 85000 Salary Max : $ 95000",
+# "Pay Range - Start: $118,960.00 Pay Range - End $178,440.00",
+# "Minimum: $98,877 Midpoint: $123,596"
+_LABELED_PAIR = re.compile(
+    rf"\b(?:min(?:imum)?|start(?:ing)?)\b[^$\d]{{0,30}}\$\s*(?P<amt1>{_AMOUNT})"
+    rf"[^$]{{0,45}}?\b(?:max(?:imum)?|end|mid(?:point)?)\b[^$\d]{{0,30}}\$\s*(?P<amt2>{_AMOUNT})",
+    re.IGNORECASE,
+)
+
+# A single stated salary: "Compensation $110,000 + 5% bonus", "annual salary of
+# $90,000", "Salary: $115,000". Deliberately requires the keyword right before
+# the amount so benefit figures ("$5,000 per year for professional
+# development") don't qualify.
+_POINT_SALARY = re.compile(
+    rf"\b(?:salary|compensation|pay)\b\s*[:\-–]?\s*(?:is\s+|of\s+)?\$\s*(?P<amt>{_AMOUNT})",
+    re.IGNORECASE,
+)
+
+_SALARY_WORDS = re.compile(r"salar|\bpay\b|\brate\b|compensat|wage", re.IGNORECASE)
 
 
 def _to_number(text: str) -> float:
@@ -121,6 +156,21 @@ def _to_number(text: str) -> float:
     if text[-1] in "kK":
         return float(text[:-1]) * 1000
     return float(text)
+
+
+def _interval_factor(hint: str, lo: float) -> float | None:
+    """Yearly multiplier for a pay interval named in `hint`, or None if the
+    amounts are too small to be yearly and no interval is named."""
+    if re.search(r"hour|/\s*hr\b", hint):
+        return 2080.0
+    if re.search(r"month|/\s*mo\b", hint):
+        return 12.0
+    if re.search(r"week|/\s*wk\b", hint):
+        return 52.0
+    if re.search(r"year|/\s*yr\b|annual", hint):
+        return 1.0
+    # Small numbers with no interval marker are too ambiguous to assume yearly.
+    return 1.0 if lo >= 1000 else None
 
 
 def parse_salary_text(text: str) -> tuple[float, float] | None:
@@ -132,25 +182,44 @@ def parse_salary_text(text: str) -> tuple[float, float] | None:
     # JobSpy renders descriptions as markdown with escaped punctuation ("\-", "\.").
     text = text.replace("\\", "")
     lows, highs = [], []
+
+    def consider(lo: float, hi: float, hint: str) -> None:
+        factor = _interval_factor(hint.lower(), lo)
+        if factor is None:
+            return
+        if factor == 2080.0 and lo >= 10_000:
+            # "Annual Base Salary Range Or Hourly Base Pay Range $70,400 - ...":
+            # nobody pays five figures an hour; the amounts are yearly.
+            factor = 1.0
+        lo, hi = lo * factor, hi * factor
+        if lo <= hi and 10_000 <= lo <= 2_000_000 and hi <= 2_000_000:
+            lows.append(lo)
+            highs.append(hi)
+
     for m in _SALARY_RANGE.finditer(text):
-        if not (m.group(1) or m.group(3) or m.group(4) or m.group(6)):
+        if not any(m.group(g) for g in ("cur1", "dol1", "cur1b", "cur2", "dol2", "cur2b")):
             continue
-        lo, hi = _to_number(m.group(2)), _to_number(m.group(5))
-        if lo > hi:
-            continue
-        context = text[max(0, m.start() - 30):m.end() + 30].lower()
-        if "hour" in context:
-            lo, hi = lo * 2080, hi * 2080
-        elif "month" in context:
-            lo, hi = lo * 12, hi * 12
-        elif "week" in context:
-            lo, hi = lo * 52, hi * 52
-        elif lo < 1000:
-            continue  # small numbers with no interval marker are too ambiguous
-        if not (10_000 <= lo <= 2_000_000 and hi <= 2_000_000):
-            continue
-        lows.append(lo)
-        highs.append(hi)
+        a1, a2 = m.group("amt1"), m.group("amt2")
+        lo, hi = _to_number(a1), _to_number(a2)
+        # "$100-115k": the k qualifies both endpoints.
+        if a2.strip()[-1] in "kK" and a1.strip()[-1] not in "kK" and lo < 1000:
+            lo *= 1000
+        # "$125-$135,000 annually": the thousands qualify both endpoints.
+        elif lo < 1000 <= hi and "," in a2 and lo * 1000 <= hi:
+            lo *= 1000
+        hint = (m.group("ivl1") or m.group("ivl2")
+                or text[max(0, m.start() - 45):m.end() + 30])
+        consider(lo, hi, hint)
+
+    for m in _LABELED_PAIR.finditer(text):
+        context = text[max(0, m.start() - 20):m.end() + 20]
+        if _SALARY_WORDS.search(context):
+            consider(_to_number(m.group("amt1")), _to_number(m.group("amt2")), context)
+
+    for m in _POINT_SALARY.finditer(text):
+        amount = _to_number(m.group("amt"))
+        consider(amount, amount, text[max(0, m.start() - 45):m.end() + 30])
+
     if not lows:
         return None
     return min(lows), max(highs)

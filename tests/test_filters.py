@@ -127,6 +127,73 @@ class TestParseSalaryText:
     def test_hourly_range(self):
         assert parse_salary_text("Pay: $75 to $90 per hour") == (75 * 2080, 90 * 2080)
 
+    def test_interval_suffix_on_each_amount(self):
+        text = "expected to be between $133,200/year and $219,600/year. However,"
+        assert parse_salary_text(text) == (133200, 219600)
+
+    def test_usd_prefix_and_yr_suffix(self):
+        text = "Target salary range: USD $105,230.00/Yr. - USD $111,000.00/Yr."
+        assert parse_salary_text(text) == (105230, 111000)
+
+    def test_hourly_suffix_without_spaces(self):
+        assert parse_salary_text("estimated to be $55.00/hr-$60.00/hr") == \
+            (55 * 2080, 60 * 2080)
+
+    def test_k_suffix_qualifies_both_endpoints(self):
+        assert parse_salary_text("Salary will be in the $100-115k range plus bonus") == \
+            (100000, 115000)
+
+    def test_labeled_min_max_pair(self):
+        text = "office. Minimum Salary: $120,000 Maximum Salary: $175,000 The minimum"
+        assert parse_salary_text(text) == (120000, 175000)
+
+    def test_labeled_min_max_rate_annually(self):
+        text = "rolling basis. Minimum Rate $100,000 Annually Maximum Rate $245,000 Annually"
+        assert parse_salary_text(text) == (100000, 245000)
+
+    def test_labeled_pair_reversed_word_order(self):
+        text = "Salary Type : Annual Salary Salary Min : $ 85000 Salary Max : $ 95000"
+        assert parse_salary_text(text) == (85000, 95000)
+
+    def test_labeled_range_start_end(self):
+        text = "Compensation Range Pay Range - Start: $118,960.00 Pay Range - End $178,440.00"
+        assert parse_salary_text(text) == (118960, 178440)
+
+    def test_labeled_pair_without_salary_context_ignored(self):
+        assert parse_salary_text("min order $25,000 max discount $40,000 on fleet") is None
+
+    def test_labeled_min_midpoint(self):
+        text = "Salary/Wage Info Grade: S5 Minimum: $98,877 Midpoint: $123,596"
+        assert parse_salary_text(text) == (98877, 123596)
+
+    def test_adjacent_amounts_without_separator(self):
+        text = "Employment Type: Full-Time Compensation: $300,000 $450,000 Base + Equity"
+        assert parse_salary_text(text) == (300000, 450000)
+
+    def test_thousands_qualify_both_endpoints(self):
+        assert parse_salary_text("Salary Range: $125-$135,000 annually") == (125000, 135000)
+
+    def test_point_salary(self):
+        assert parse_salary_text("Competitive annual salary of $90,000. Remote.") == \
+            (90000, 90000)
+        assert parse_salary_text("Compensation $110,000 + 5% annual bonus") == \
+            (110000, 110000)
+
+    def test_point_salary_needs_adjacent_keyword(self):
+        # Benefit amounts must not read as pay even with "per year" nearby.
+        assert parse_salary_text("laptop $5,000 per year for professional development, "
+                                 "plus $600 per year for tech") is None
+
+    def test_hourly_word_near_yearly_amounts_ignored(self):
+        # Boilerplate like "Annual Base Salary Range Or Hourly Base Pay Range"
+        # must not multiply five-figure amounts by 2080.
+        text = "Annual Base Salary Range Or Hourly Base Pay Range $70,400.00 - $128,379.99"
+        assert parse_salary_text(text) == (70400, 128379.99)
+
+    def test_hourly_range_with_leading_hourly_label(self):
+        text = "The Hourly pay range for this role is $29.67 - $32.96 for Illinois"
+        assert parse_salary_text(text) == (29.67 * 2080, 32.96 * 2080)
+
     def test_years_of_experience_not_mistaken_for_pay(self):
         assert parse_salary_text("Requires 3-5 years of experience") is None
 

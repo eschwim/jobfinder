@@ -29,7 +29,7 @@ def salary_str(job: Job, unlisted: bool) -> str:
     if unlisted or (lo is None and hi is None):
         return "salary unlisted"
     currency = job.currency or ""
-    if lo and hi:
+    if lo and hi and lo != hi:
         text = f"{lo:,.0f}–{hi:,.0f} {currency}/yr"
     else:
         text = f"{(lo or hi):,.0f} {currency}/yr"
