@@ -107,11 +107,11 @@ def describes_hybrid(text: str) -> bool:
 
 
 # "$208,000 - $333,500", "208,000 USD - 333,500 USD", "$61,900.00 to $141,000.00",
-# "$150k-200k", "$75 to $90 per hour"
+# "$150k-200k", "$75 to $90 per hour", "between $104,400 and $171,000/year"
 _AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*[kK]\b|\d+(?:\.\d+)?"
 _SALARY_RANGE = re.compile(
     rf"(\$?)\s*({_AMOUNT})\s*(USD)?"
-    r"\s*(?:-|–|—|\bto\b)\s*"
+    r"\s*(?:-|–|—|\bto\b|\band\b)\s*"
     rf"(\$?)\s*({_AMOUNT})\s*(USD)?"
 )
 

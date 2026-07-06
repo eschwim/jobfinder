@@ -118,6 +118,12 @@ class TestParseSalaryText:
     def test_dollar_k_range(self):
         assert parse_salary_text("Compensation: $150k-200k plus equity") == (150000, 200000)
 
+    def test_between_and_phrasing(self):
+        # linkedin.com/jobs/view/4433913187 — salary only in the description, joined by "and"
+        text = ("the pay range for this position at commencement of employment is "
+                "expected to be between $104,400 and $171,000/year.")
+        assert parse_salary_text(text) == (104400, 171000)
+
     def test_hourly_range(self):
         assert parse_salary_text("Pay: $75 to $90 per hour") == (75 * 2080, 90 * 2080)
 
