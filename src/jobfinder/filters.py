@@ -148,6 +148,15 @@ _POINT_SALARY = re.compile(
     re.IGNORECASE,
 )
 
+# One-sided salary bounds: "Salary: Up to $245,000.00 per year" (max only),
+# "at least $139,556 per year", "salary starting at $130,000", "Pay Range:
+# Starting from $140,000", "begins at $160,000" (min only).
+_ONE_SIDED = re.compile(
+    rf"\b(?P<kind>up\s+to|at\s+least|starting\s+(?:at|from)|begins?\s+at)"
+    rf"\s+\$\s*(?P<amt>{_AMOUNT})",
+    re.IGNORECASE,
+)
+
 _SALARY_WORDS = re.compile(r"salar|\bpay\b|\brate\b|compensat|wage", re.IGNORECASE)
 
 
@@ -173,28 +182,38 @@ def _interval_factor(hint: str, lo: float) -> float | None:
     return 1.0 if lo >= 1000 else None
 
 
-def parse_salary_text(text: str) -> tuple[float, float] | None:
+def parse_salary_text(text: str) -> tuple[float | None, float | None] | None:
     """Extract a yearly USD salary range from free text (min across all ranges, max across all).
 
-    Only ranges marked with $ or USD count, so "3-5 years experience" is never
-    mistaken for pay. Returns None if nothing plausible is found.
+    Only amounts marked with $ or USD count, so "3-5 years experience" is never
+    mistaken for pay. One side may be None when the text only bounds the salary
+    from one direction ("up to $245,000"). Returns None if nothing plausible is
+    found.
     """
     # JobSpy renders descriptions as markdown with escaped punctuation ("\-", "\.").
     text = text.replace("\\", "")
     lows, highs = [], []
 
-    def consider(lo: float, hi: float, hint: str) -> None:
-        factor = _interval_factor(hint.lower(), lo)
+    def consider(lo: float | None, hi: float | None, hint: str) -> None:
+        ref = lo if lo is not None else hi
+        factor = _interval_factor(hint.lower(), ref)
         if factor is None:
             return
-        if factor == 2080.0 and lo >= 10_000:
-            # "Annual Base Salary Range Or Hourly Base Pay Range $70,400 - ...":
-            # nobody pays five figures an hour; the amounts are yearly.
+        if factor > 1 and ref * factor > 2_000_000 and ref >= 10_000:
+            # An interval word near yearly amounts ("Annual Salary Range Or
+            # Hourly Pay Range $70,400 - ...", "5 Days/Week ... $300,000"):
+            # when the guess is implausible but the plain reading isn't, the
+            # amounts are yearly.
             factor = 1.0
-        lo, hi = lo * factor, hi * factor
-        if lo <= hi and 10_000 <= lo <= 2_000_000 and hi <= 2_000_000:
-            lows.append(lo)
-            highs.append(hi)
+        lo = lo * factor if lo is not None else None
+        hi = hi * factor if hi is not None else None
+        for side in (lo, hi):
+            if side is not None and not (10_000 <= side <= 2_000_000):
+                return
+        if lo is not None and hi is not None and lo > hi:
+            return
+        lows.append(lo)
+        highs.append(hi)
 
     for m in _SALARY_RANGE.finditer(text):
         if not any(m.group(g) for g in ("cur1", "dol1", "cur1b", "cur2", "dol2", "cur2b")):
@@ -220,9 +239,24 @@ def parse_salary_text(text: str) -> tuple[float, float] | None:
         amount = _to_number(m.group("amt"))
         consider(amount, amount, text[max(0, m.start() - 45):m.end() + 30])
 
+    for m in _ONE_SIDED.finditer(text):
+        # Only near pay language: "save up to $2,000 on commuter benefits" and
+        # "tuition assistance up to $25,000" must not read as salary bounds.
+        if not _SALARY_WORDS.search(text[max(0, m.start() - 45):m.start()]):
+            continue
+        amount = _to_number(m.group("amt"))
+        hint = text[max(0, m.start() - 45):m.end() + 30]
+        if m.group("kind").lower().startswith("up"):
+            consider(None, amount, hint)
+        else:
+            consider(amount, None, hint)
+
     if not lows:
         return None
-    return min(lows), max(highs)
+    lo_vals = [x for x in lows if x is not None]
+    hi_vals = [x for x in highs if x is not None]
+    return (min(lo_vals) if lo_vals else None,
+            max(hi_vals) if hi_vals else None)
 
 
 def evaluate(job: Job, filters: Filters) -> Match | None:

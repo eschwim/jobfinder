@@ -194,6 +194,28 @@ class TestParseSalaryText:
         text = "The Hourly pay range for this role is $29.67 - $32.96 for Illinois"
         assert parse_salary_text(text) == (29.67 * 2080, 32.96 * 2080)
 
+    def test_week_in_context_does_not_poison_point_salary(self):
+        text = "(On-Site – 5 Days/Week) Employment Type: Full-Time Compensation: $300,000+Base"
+        assert parse_salary_text(text) == (300000, 300000)
+
+    def test_up_to_gives_max_only(self):
+        text = "Level 1 – Subject Matter Expert Salary: Up to $245,000.00 per year"
+        assert parse_salary_text(text) == (None, 245000)
+
+    def test_at_least_gives_min_only(self):
+        text = "travel expenses. Salary: at least $139,556 per year. Job Location:"
+        assert parse_salary_text(text) == (139556, None)
+
+    def test_starting_at_gives_min_only(self):
+        assert parse_salary_text("Competitive salary starting at $130,000 Health,") == \
+            (130000, None)
+        assert parse_salary_text("Pay Range: Starting from $140,000 What's the Job?") == \
+            (140000, None)
+
+    def test_one_sided_needs_pay_context(self):
+        assert parse_salary_text("tuition assistance up to $25,000 for degree programs") is None
+        assert parse_salary_text("Referral Bonus Program offering up to $50,000") is None
+
     def test_years_of_experience_not_mistaken_for_pay(self):
         assert parse_salary_text("Requires 3-5 years of experience") is None
 
