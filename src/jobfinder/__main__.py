@@ -1,4 +1,4 @@
-"""Run one poll cycle: scrape, filter, dedupe, notify."""
+"""CLI entry point: run one poll cycle and exit."""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ import sys
 from pathlib import Path
 
 from .config import ConfigError, load_config
-from .filters import Match, evaluate
 from .notify import Notifier, NotifyError, build_channels
-from .scraper import fetch_jobs
+from .runner import run_once
 from .store import Store
 
 log = logging.getLogger("jobfinder")
@@ -53,42 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     store = Store(args.db, repost_window_days=cfg.repost_window_days)
-    matches: list[Match] = []
-    site_totals: dict[str, int] = {}
-
     try:
-        for search in cfg.searches:
-            jobs, counts = fetch_jobs(search)
-            for site, count in counts.items():
-                site_totals[site] = site_totals.get(site, 0) + count
-            for job in jobs:
-                if store.is_seen(job):
-                    # Record repost sightings too, so an actively reposted role
-                    # keeps its repost window fresh instead of re-alerting
-                    # every window's end.
-                    if not args.dry_run:
-                        store.mark_seen(job)
-                    continue
-                match = evaluate(job, cfg.filters)
-                if match:
-                    if not args.dry_run:
-                        store.mark_seen(job)
-                    matches.append(match)
-
-        log.info("%d new matching job(s) this run", len(matches))
-        notifier.alert_matches(matches, cfg.notify.digest_threshold)
-
-        for site, total in site_totals.items():
-            streak = store.record_site_count(site, total)
-            if cfg.notify.health_alerts and streak == cfg.notify.empty_runs_before_alert:
-                log.warning("%s empty for %d consecutive runs", site, streak)
-                notifier.health_alert(site, streak)
-    except NotifyError as exc:
-        log.error("%s", exc)
-        return 1
+        result = run_once(cfg, store, notifier, dry_run=args.dry_run)
     finally:
         store.close()
-    return 0
+    return 1 if result.error else 0
 
 
 if __name__ == "__main__":

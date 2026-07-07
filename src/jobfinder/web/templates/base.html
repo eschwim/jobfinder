@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}jobfinder{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<nav>
+  <span class="brand">jobfinder</span>
+  <a href="/jobs" class="{{ 'active' if active == 'jobs' else '' }}">Jobs</a>
+  <a href="/config" class="{{ 'active' if active == 'config' else '' }}">Config</a>
+  <a href="/status" class="{{ 'active' if active == 'status' else '' }}">Status</a>
+</nav>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% set active = 'config' %}
+{% block title %}jobfinder — config{% endblock %}
+
+{% macro search_fields(s) %}
+  <div class="grid">
+    <label>Name <input name="name" value="{{ s.get('name', '') }}" required></label>
+    <label>Search term <input name="search_term" value="{{ s.get('search_term', '') }}" required></label>
+    <label>Location <input name="location" value="{{ s.get('location', '') }}"
+           placeholder="San Francisco, CA"></label>
+    <label>Hours old <input name="hours_old" type="number" min="1"
+           value="{{ s.get('hours_old', 4) }}"></label>
+    <label>Results wanted <input name="results_wanted" type="number" min="1"
+           value="{{ s.get('results_wanted', 30) }}"></label>
+    <label>Indeed country <input name="country_indeed"
+           value="{{ s.get('country_indeed', 'USA') }}"></label>
+    <label>Google search term <input name="google_search_term"
+           value="{{ s.get('google_search_term', '') }}" placeholder="(auto)"></label>
+  </div>
+  <div class="checks">
+    <fieldset>
+      <legend>Sites</legend>
+      {% for site in known_sites %}
+      <label class="check"><input type="checkbox" name="sites" value="{{ site }}"
+             {{ 'checked' if site in (s.get('sites') or []) else '' }}> {{ site }}</label>
+      {% endfor %}
+    </fieldset>
+    <label class="check"><input type="checkbox" name="fetch_descriptions"
+           {{ 'checked' if s.get('fetch_descriptions') else '' }}> Fetch descriptions
+           (parses salary from text; extra request per LinkedIn job)</label>
+    <label class="check"><input type="checkbox" name="is_remote"
+           {{ 'checked' if s.get('is_remote') else '' }}> Remote only (board's remote facet)</label>
+  </div>
+{% endmacro %}
+
+{% block content %}
+<h1>Configuration</h1>
+
+{% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+{% if saved %}<div class="banner ok">Saved. The scheduler picked up the change.</div>{% endif %}
+<p class="note">Secrets (Pushover / SMTP credentials) are read from the environment and
+can't be edited here — see the Status page for which are set. Comments in
+config.yaml are not preserved when saving from this page.</p>
+
+<section>
+  <h2>Searches</h2>
+  {% for s in searches %}
+  <details class="card" {{ 'open' if searches|length == 1 else '' }}>
+    <summary>{{ s.get('name', 'search ' ~ loop.index) }} —
+      “{{ s.get('search_term', '') }}” {{ '@ ' ~ s.get('location') if s.get('location') else '' }}</summary>
+    <form method="post" action="/config/searches/{{ loop.index0 }}">
+      {{ search_fields(s) }}
+      <div class="actions">
+        <button type="submit">Save search</button>
+        <button type="submit" class="danger"
+                formaction="/config/searches/{{ loop.index0 }}/delete"
+                onclick="return confirm('Delete this search?')">Delete</button>
+      </div>
+    </form>
+  </details>
+  {% endfor %}
+
+  <details class="card add">
+    <summary>+ Add search</summary>
+    <form method="post" action="/config/searches">
+      {{ search_fields({}) }}
+      <div class="actions"><button type="submit">Add search</button></div>
+    </form>
+  </details>
+</section>
+
+<section>
+  <h2>Filters</h2>
+  <form method="post" action="/config/filters" class="card">
+    <div class="grid">
+      <label>Title include (regex, one per line, any-match)
+        <textarea name="title_include" rows="3">{{ (filters.get('title_include') or []) | join('\n') }}</textarea></label>
+      <label>Title exclude (regex, one per line)
+        <textarea name="title_exclude" rows="3">{{ (filters.get('title_exclude') or []) | join('\n') }}</textarea></label>
+      <label>Employers to skip (one per line, whole-word)
+        <textarea name="employer_exclude" rows="3">{{ (filters.get('employer_exclude') or []) | join('\n') }}</textarea></label>
+      <label>Locations allowed (regex, one per line; "remote" also matches remote-flagged postings)
+        <textarea name="locations_allow" rows="3">{{ (filters.get('locations_allow') or []) | join('\n') }}</textarea></label>
+      <label>Locations denied (regex, one per line; blocks on-site/hybrid jobs there — fully remote jobs are exempt)
+        <textarea name="locations_deny" rows="3">{{ (filters.get('locations_deny') or []) | join('\n') }}</textarea></label>
+    </div>
+    <div class="grid">
+      <label>Min salary (yearly) <input name="salary_min" type="number"
+             value="{{ salary.get('min', '') }}"></label>
+      <label>Max salary (yearly) <input name="salary_max" type="number"
+             value="{{ salary.get('max', '') }}"></label>
+      <label>Currency <input name="salary_currency"
+             value="{{ salary.get('currency', 'USD') }}"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="keep_unlisted"
+           {{ 'checked' if salary.get('keep_unlisted', True) else '' }}>
+           Keep postings with no salary data (flagged "salary unlisted")</label>
+    <div class="actions"><button type="submit">Save filters</button></div>
+  </form>
+</section>
+
+<section>
+  <h2>Notifications</h2>
+  <form method="post" action="/config/notify" class="card">
+    <fieldset>
+      <legend>Channels</legend>
+      {% for channel in known_channels %}
+      <label class="check"><input type="checkbox" name="channels" value="{{ channel }}"
+             {{ 'checked' if channel in (notify.get('channels') or []) else '' }}> {{ channel }}</label>
+      {% endfor %}
+    </fieldset>
+    <div class="grid">
+      <label>Digest threshold (pushover: more matches than this → one digest push)
+        <input name="digest_threshold" type="number" min="0"
+               value="{{ notify.get('digest_threshold', 5) }}"></label>
+      <label>Empty runs before health alert
+        <input name="empty_runs_before_alert" type="number" min="1"
+               value="{{ notify.get('empty_runs_before_alert', 3) }}"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="health_alerts"
+           {{ 'checked' if notify.get('health_alerts', True) else '' }}>
+           Alert when a site looks broken</label>
+    <div class="actions"><button type="submit">Save notifications</button></div>
+  </form>
+</section>
+
+<section>
+  <h2>General</h2>
+  <form method="post" action="/config/general" class="card">
+    <div class="grid">
+      <label>Poll interval (minutes)
+        <input name="poll_interval_minutes" type="number" min="1"
+               value="{{ poll_interval_minutes }}"></label>
+      <label>Repost suppression window (days, 0 disables)
+        <input name="repost_window_days" type="number" min="0"
+               value="{{ repost_window_days }}"></label>
+    </div>
+    <div class="actions"><button type="submit">Save general</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import pandas as pd
@@ -41,6 +42,57 @@ def _fetch_linkedin_description(url: str) -> str | None:
     return div.get_text(" ", strip=True) if div else None
 
 
+_GUEST_SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+
+
+def _guest_search_ids(keywords: str, f_wt: str | None = None) -> set[str] | None:
+    """Job-posting ids returned by LinkedIn's guest search, or None on error."""
+    params = {"keywords": keywords}
+    if f_wt:
+        params["f_WT"] = f_wt
+    try:
+        resp = requests.get(_GUEST_SEARCH, params=params,
+                            headers={"User-Agent": _BROWSER_UA}, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
+    return set(re.findall(r"urn:li:jobPosting:(\d+)", resp.text))
+
+
+def linkedin_says_remote(job: Job, attempts: int = 3) -> bool | None:
+    """Cross-check a facet-returned "remote" job against LinkedIn's own
+    workplace-type data.
+
+    The remote search facet (f_WT=2) sometimes returns hybrid postings, and
+    the guest job page carries no workplace-type field to catch them. The
+    guest *search* endpoint knows the truth, but nondeterministically ignores
+    f_WT and serves generic results instead — so a single query proves
+    nothing. Query the exact posting under the remote facet AND its
+    complement (on-site+hybrid, f_WT=1,3): an honored pair puts the job in
+    exactly one; a facet-ignored response puts it in both, which reads as
+    inconsistent and is retried. Returns True (remote), False
+    (hybrid/on-site), or None (inconclusive after all attempts).
+    """
+    job_id = re.sub(r"\D", "", job.id)
+    if not job_id or not job.title:
+        return None
+    keywords = f'"{job.title}" {job.company}'.strip()
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(2)
+        remote = _guest_search_ids(keywords, f_wt="2")
+        time.sleep(1)
+        onsite = _guest_search_ids(keywords, f_wt="1,3")
+        if remote is None or onsite is None:
+            continue
+        in_remote, in_onsite = job_id in remote, job_id in onsite
+        if in_remote != in_onsite:
+            return in_remote
+        # In both: a facet was ignored. In neither: the search can't see the
+        # posting. Either way this round proves nothing.
+    return None
+
+
 def _clean(value):
     if value is None:
         return None
@@ -75,6 +127,7 @@ def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
         # "remote sensing" in fetched descriptions — trust only title/location,
         # or the search itself having filtered on the board's remote facet.
         is_remote=assume_remote or text_remote,
+        remote_by_facet=assume_remote and not text_remote,
         min_amount=float(min_amount) if min_amount is not None else None,
         max_amount=float(max_amount) if max_amount is not None else None,
         interval=_clean(row.get("interval")),

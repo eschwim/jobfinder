@@ -1,0 +1,10 @@
+services:
+  jobfinder:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env            # PUSHOVER_* / SMTP_* / EMAIL_* secrets
+    volumes:
+      - ./data:/data    # config.yaml + jobfinder.db
+    restart: unless-stopped

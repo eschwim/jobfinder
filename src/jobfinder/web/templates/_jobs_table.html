@@ -1,0 +1,49 @@
+{% macro th(col, label, first_dir='asc') %}
+{% set next_dir = ('desc' if dir == 'asc' else 'asc') if sort == col else first_dir %}
+{% set qs = 'window=' ~ window ~ '&sort=' ~ col ~ '&dir=' ~ next_dir %}
+<th><a class="sort" hx-get="/jobs/table?{{ qs }}" hx-target="#jobs"
+       hx-push-url="/jobs?{{ qs }}" href="/jobs?{{ qs }}">{{ label }}{% if sort == col %}
+   <span class="sort-arrow">{{ '▲' if dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
+{% endmacro %}
+<div class="toolbar">
+  {% for w in windows %}
+  <button class="chip {{ 'active' if w == window else '' }}"
+          hx-get="/jobs/table?window={{ w }}&sort={{ sort }}&dir={{ dir }}" hx-target="#jobs"
+          hx-push-url="/jobs?window={{ w }}&sort={{ sort }}&dir={{ dir }}">{{ w }}</button>
+  {% endfor %}
+  <span class="count">{{ jobs|length }} match{{ 'es' if jobs|length != 1 else '' }}</span>
+</div>
+{% if jobs %}
+<div class="table-wrap">
+<table class="jobs">
+  <thead>
+    <tr>
+      {{ th('title', 'Title') }}
+      {{ th('company', 'Company') }}
+      {{ th('location', 'Location') }}
+      {{ th('min', 'Min $/yr', 'desc') }}
+      {{ th('max', 'Max $/yr', 'desc') }}
+      {{ th('site', 'Site') }}
+      {{ th('posted', 'Posted', 'desc') }}
+      {{ th('matched', 'Matched', 'desc') }}
+    </tr>
+  </thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td><a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a></td>
+      <td>{{ job.company }}</td>
+      <td>{{ job.location }}</td>
+      <td class="num" {% if job.salary_source == 'description' %}title="parsed from description"{% endif %}>{{ job.salary_min_str }}</td>
+      <td class="num" {% if job.salary_source == 'description' %}title="parsed from description"{% endif %}>{{ job.salary_max_str }}</td>
+      <td>{{ job.site }}</td>
+      <td>{{ job.date_posted or '—' }}</td>
+      <td title="{{ job.matched_at }}">{{ job.matched_at|rel_time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No matches in this window.</p>
+{% endif %}

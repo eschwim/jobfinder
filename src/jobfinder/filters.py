@@ -26,6 +26,10 @@ class Job:
     url: str = ""
     location: str | None = None
     is_remote: bool = False
+    # True when is_remote comes only from the board's remote search facet, with
+    # no "remote" in the title/location to back it up. LinkedIn's facet
+    # sometimes returns hybrid postings, so this remoteness is verifiable.
+    remote_by_facet: bool = False
     min_amount: float | None = None
     max_amount: float | None = None
     interval: str | None = None
@@ -63,13 +67,23 @@ def _employer_ok(job: Job, filters: Filters) -> bool:
     )
 
 
+def location_matches(job: Job, filters: Filters) -> bool:
+    """The tagged location itself matches the allowlist (remote flags aside)."""
+    return any(p.search(job.location or "") for p in filters.locations_allow)
+
+
 def _location_ok(job: Job, filters: Filters) -> bool:
+    # Denylist beats the allowlist for on-site/hybrid jobs, but a fully remote
+    # job is fine wherever the posting happens to be tagged — remote postings
+    # are often tagged with a hiring-hub city.
+    if (not job.is_remote
+            and any(p.search(job.location or "") for p in filters.locations_deny)):
+        return False
     if not filters.locations_allow:
         return True
     if job.is_remote and any(p.search("remote") for p in filters.locations_allow):
         return True
-    location = job.location or ""
-    return any(p.search(location) for p in filters.locations_allow)
+    return location_matches(job, filters)
 
 
 def _salary_state(job: Job, filters: Filters) -> str:
@@ -95,8 +109,8 @@ def _salary_state(job: Job, filters: Filters) -> str:
 _HYBRID_HINTS = re.compile(
     r"hybrid\s+(?:work(?:ing|place)?|role|schedule|model|position|arrangement|environment|setup)"
     r"|(?:role|position|schedule|arrangement)\s+(?:is|will\s+be)\s+hybrid"
-    r"|days?\s+(?:a\s+week\s+|per\s+week\s+)?(?:in|at)\s+(?:the\s+|our\s+)?office"
-    r"|days?\s+(?:a\s+week\s+|per\s+week\s+)?on-?site",
+    r"|days?\s*(?:(?:a|per)\s+week|/\s*week)?\s+(?:in|at)\s+(?:the\s+|our\s+)?(?:office|person\b)"
+    r"|days?\s*(?:(?:a|per)\s+week|/\s*week)?\s+on-?site",
     re.IGNORECASE,
 )
 

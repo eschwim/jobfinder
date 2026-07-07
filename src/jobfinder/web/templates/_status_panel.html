@@ -1,0 +1,80 @@
+<div id="status-panel" hx-get="/status/panel" hx-trigger="every 10s"
+     hx-swap="outerHTML">
+
+  {% if test_notify_result %}
+  <div class="banner {{ 'ok' if 'sent' in test_notify_result else 'error' }}">
+    Test notification: {{ test_notify_result }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Scheduler</h2>
+    {% if scheduler %}
+      {% if scheduler.config_error %}
+      <div class="banner error">Config problem — scheduler idle:
+        {{ scheduler.config_error }}</div>
+      {% endif %}
+      {% if scheduler.notify_error %}
+      <div class="banner warn">Notifications disabled last run:
+        {{ scheduler.notify_error }}</div>
+      {% endif %}
+      <dl>
+        <dt>State</dt>
+        <dd>{{ 'polling now…' if scheduler.running else 'idle' }}</dd>
+        <dt>Next run</dt>
+        <dd>{% if scheduler.running %}—{% elif scheduler.next_run_at %}
+            {{ scheduler.next_run_at.strftime('%Y-%m-%d %H:%M UTC') }}
+            {% else %}not scheduled{% endif %}</dd>
+      </dl>
+    {% else %}
+      <p class="empty">Scheduler not running.</p>
+    {% endif %}
+    <div class="actions">
+      <button hx-post="/run" hx-target="#status-panel" hx-swap="outerHTML">Run now</button>
+      <button hx-post="/test-notify" hx-target="#status-panel" hx-swap="outerHTML">
+        Send test notification</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Last run</h2>
+    {% if last_run %}
+    <dl>
+      <dt>Started</dt><dd title="{{ last_run['started_at'] }}">{{ last_run['started_at']|rel_time }}</dd>
+      <dt>Finished</dt><dd>{{ last_run['finished_at']|rel_time if last_run['finished_at'] else 'still running' }}</dd>
+      <dt>Matches</dt><dd>{{ last_run['matches'] if last_run['matches'] is not none else '—' }}</dd>
+      <dt>Error</dt><dd>{{ last_run['error'] or 'none' }}</dd>
+    </dl>
+    {% else %}
+    <p class="empty">No runs recorded yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Site health</h2>
+    {% if site_health %}
+    <table>
+      <thead><tr><th>Site</th><th>Consecutive empty runs</th></tr></thead>
+      <tbody>
+      {% for row in site_health %}
+        <tr class="{{ 'bad' if row['consecutive_empty'] > 2 else '' }}">
+          <td>{{ row['site'] }}</td><td>{{ row['consecutive_empty'] }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No site data yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Secrets (from environment)</h2>
+    <table>
+      <tbody>
+      {% for name, is_set in secrets.items() %}
+        <tr><td>{{ name }}</td>
+            <td class="{{ 'ok-text' if is_set else 'bad' }}">{{ 'set' if is_set else 'not set' }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

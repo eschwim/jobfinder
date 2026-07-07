@@ -66,6 +66,33 @@ class TestLocation:
         assert evaluate(_job(location="Anywhere"), _filters())
 
 
+class TestLocationDeny:
+    # Bellevue-style rule: on-site/hybrid jobs there are out even though the
+    # ",\s*wa\b" allowlist would accept them; fully remote ones stay in.
+
+    def _f(self):
+        return _filters(locations_allow=_loc(r",\s*wa\b", "remote"),
+                        locations_deny=_loc("bellevue"))
+
+    def test_onsite_job_in_denied_location_rejected(self):
+        assert evaluate(_job(location="Bellevue, WA", is_remote=False), self._f()) is None
+
+    def test_remote_job_tagged_in_denied_location_kept(self):
+        assert evaluate(_job(location="Bellevue, WA", is_remote=True), self._f())
+
+    def test_other_allowed_locations_unaffected(self):
+        assert evaluate(_job(location="Seattle, WA", is_remote=False), self._f())
+
+    def test_deny_is_case_insensitive(self):
+        f = _filters(locations_deny=[re.compile("bellevue", re.IGNORECASE)])
+        assert evaluate(_job(location="BELLEVUE, WA"), f) is None
+
+    def test_deny_applies_even_without_allowlist(self):
+        f = _filters(locations_deny=_loc("bellevue"))
+        assert evaluate(_job(location="Bellevue, WA"), f) is None
+        assert evaluate(_job(location="Spokane, WA"), f)
+
+
 class TestSalary:
     def test_yearly_normalization(self):
         hourly = _job(min_amount=30, max_amount=40, interval="hourly")
@@ -234,6 +261,8 @@ class TestDescribesHybrid:
             "hybrid schedule with 3 days in the office",
             "you'll spend 2 days per week on-site",
             "expected in the office 3 days a week... 3 days at our office",
+            "Full-time Hybrid (3+ days/week in office)",
+            "Brooklyn Navy Yard office, 3+ days a week in person",
         ]:
             assert describes_hybrid(text), text
 

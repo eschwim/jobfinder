@@ -25,6 +25,9 @@ searches:
   # Nationwide-remote jobs are tagged "United States", which geo-scoped searches
   # never return — add a remote search to catch them. is_remote uses the board's
   # structured remote facet (LinkedIn only; Indeed ignores it when hours_old is set).
+  # LinkedIn's facet regularly leaks hybrid/on-site jobs, so matches from remote
+  # searches tagged outside locations_allow are re-verified against LinkedIn's
+  # workplace-type data before alerting (two extra requests per suspect job).
   - name: platform-eng-remote
     sites: [linkedin]
     search_term: "platform engineer"
@@ -43,6 +46,10 @@ filters:
   # Case-insensitive regexes matched against the posting location; "remote" also
   # accepts postings flagged remote. ',\s*(ca|wa)\b' catches "Oakland, CA" style.
   locations_allow: ["san francisco", "remote"]
+  # On-site/hybrid jobs in these locations are rejected even when the allowlist
+  # would accept them; fully remote jobs are exempt (remote postings are often
+  # tagged with a hiring-hub city).
+  locations_deny: ["sacramento"]
   salary:
     min: 150000           # yearly; hourly/monthly postings are normalized before comparing
     currency: USD
@@ -60,3 +67,7 @@ notify:
 # tagged to a different metro. A job whose company+title already alerted within
 # this many days of its last sighting is suppressed as a repost. 0 disables.
 repost_window_days: 60
+
+# Minutes between poll cycles (web app scheduler). Keep hours_old above
+# slightly larger than this so consecutive runs overlap; overlap is deduped.
+poll_interval_minutes: 120
