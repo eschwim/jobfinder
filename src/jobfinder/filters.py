@@ -36,6 +36,9 @@ class Job:
     currency: str | None = None
     salary_source: str | None = None
     date_posted: str | None = None
+    # Full description text when the search fetched it; persisted for matches
+    # so the daily digest can compare requirements against the resume.
+    description: str | None = None
 
 
 @dataclass

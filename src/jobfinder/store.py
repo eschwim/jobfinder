@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
     currency        TEXT,
     salary_source   TEXT,
     salary_unlisted INTEGER,
-    date_posted     TEXT
+    date_posted     TEXT,
+    description     TEXT
 );
 CREATE INDEX IF NOT EXISTS seen_jobs_fingerprint ON seen_jobs (fingerprint);
 CREATE INDEX IF NOT EXISTS seen_jobs_matched_at ON seen_jobs (matched_at) WHERE matched = 1;
@@ -42,6 +43,15 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TEXT,
     matches     INTEGER,
     error       TEXT
+);
+CREATE TABLE IF NOT EXISTS digests (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sent_at  TEXT NOT NULL,
+    matches  INTEGER,
+    strong   INTEGER,
+    weak     INTEGER,
+    none     INTEGER,
+    error    TEXT
 );
 """
 
@@ -61,6 +71,7 @@ _SEEN_JOBS_UPGRADES = [
     ("salary_source", "TEXT"),
     ("salary_unlisted", "INTEGER"),
     ("date_posted", "TEXT"),
+    ("description", "TEXT"),
 ]
 
 
@@ -143,8 +154,9 @@ class Store:
         self._conn.execute(
             "INSERT INTO seen_jobs (id, title, company, site, url, first_seen, fingerprint,"
             " matched, matched_at, location, is_remote, min_amount, max_amount,"
-            " salary_interval, currency, salary_source, salary_unlisted, date_posted)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " salary_interval, currency, salary_source, salary_unlisted, date_posted,"
+            " description)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET"
             " matched = 1, matched_at = excluded.matched_at,"
             " location = excluded.location, is_remote = excluded.is_remote,"
@@ -152,12 +164,13 @@ class Store:
             " salary_interval = excluded.salary_interval, currency = excluded.currency,"
             " salary_source = excluded.salary_source,"
             " salary_unlisted = excluded.salary_unlisted,"
-            " date_posted = excluded.date_posted",
+            " date_posted = excluded.date_posted,"
+            " description = excluded.description",
             (job.id, job.title, job.company, job.site, job.url, now,
              fingerprint(job.title, job.company), now, job.location,
              int(job.is_remote), job.min_amount, job.max_amount, job.interval,
              job.currency, job.salary_source, int(match.salary_unlisted),
-             job.date_posted),
+             job.date_posted, job.description),
         )
         self._conn.commit()
 
@@ -203,6 +216,18 @@ class Store:
     def last_run(self) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+
+    def record_digest(self, matches: int, strong: int, weak: int, none: int,
+                      error: str | None = None) -> None:
+        self._conn.execute(
+            "INSERT INTO digests (sent_at, matches, strong, weak, none, error)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (_utcnow(), matches, strong, weak, none, error))
+        self._conn.commit()
+
+    def last_digest(self) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM digests ORDER BY id DESC LIMIT 1").fetchone()
 
     def _empty_streak(self, site: str) -> int:
         row = self._conn.execute(

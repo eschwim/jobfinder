@@ -138,6 +138,10 @@ class EmailChannel:
         self.sender = sender or username
         self.recipient = recipient or username
 
+    def send(self, subject: str, text: str, html_body: str | None = None) -> None:
+        """Send an arbitrary message (used by the daily digest)."""
+        self._send(subject, text, html_body)
+
     def _send(self, subject: str, text: str, html_body: str | None = None) -> None:
         msg = EmailMessage()
         msg["Subject"] = subject
@@ -174,9 +178,13 @@ class EmailChannel:
         )
 
 
-def build_channels(cfg: AppConfig) -> list:
+def build_channels(cfg: AppConfig, names: list[str] | None = None) -> list:
+    """Build channel objects for the given channel names (default: the per-run
+    alert channels). Health alerts use a separately-resolved name list."""
+    if names is None:
+        names = cfg.notify.channels
     channels = []
-    for name in cfg.notify.channels:
+    for name in names:
         if name == "pushover":
             channels.append(PushoverChannel(cfg.pushover_token, cfg.pushover_user))
         elif name == "email":
@@ -186,19 +194,23 @@ def build_channels(cfg: AppConfig) -> list:
 
 
 class Notifier:
-    def __init__(self, channels: list, dry_run: bool = False):
+    def __init__(self, channels: list, health_channels: list | None = None,
+                 dry_run: bool = False):
         self.channels = channels
+        # None means "same as per-run channels"; an explicit list (including [])
+        # decouples site-health alerts from match alerts.
+        self.health_channels = channels if health_channels is None else health_channels
         self.dry_run = dry_run
 
-    def _dispatch(self, method: str, *args) -> None:
+    def _dispatch(self, channels: list, method: str, *args) -> None:
         failed = []
-        for channel in self.channels:
+        for channel in channels:
             try:
                 getattr(channel, method)(*args)
             except Exception as exc:
                 log.error("%s channel failed: %s", channel.name, exc)
                 failed.append(channel.name)
-        if failed and len(failed) == len(self.channels):
+        if failed and len(failed) == len(channels):
             raise NotifyError(f"all notification channels failed: {', '.join(failed)}")
 
     def alert_matches(self, matches: list[Match], digest_threshold: int) -> None:
@@ -208,13 +220,13 @@ class Notifier:
             for m in matches:
                 log.info("[dry-run] would notify: %s | %s", _match_summary(m), m.job.url)
             return
-        self._dispatch("alert_matches", matches, digest_threshold)
+        self._dispatch(self.channels, "alert_matches", matches, digest_threshold)
 
     def health_alert(self, site: str, empty_runs: int) -> None:
         if self.dry_run:
             log.info("[dry-run] would send health alert: %s empty for %d runs", site, empty_runs)
             return
-        self._dispatch("health_alert", site, empty_runs)
+        self._dispatch(self.health_channels, "health_alert", site, empty_runs)
 
     def test(self) -> None:
-        self._dispatch("test_message")
+        self._dispatch(self.channels, "test_message")

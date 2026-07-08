@@ -1,10 +1,11 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from jobfinder.config import DigestConfig
 from jobfinder.runner import RunResult
-from jobfinder.web.scheduler import PollScheduler
+from jobfinder.web.scheduler import DigestScheduler, PollScheduler
 
 
 def _cfg(minutes=999):
@@ -120,5 +121,64 @@ class TestPollScheduler:
             await _until(lambda: len(calls) == 1)
             sched.trigger_now()
             await _until(lambda: len(calls) == 2)  # loop survived the crash
+            await sched.stop()
+        asyncio.run(scenario())
+
+
+def _digest_cfg(time="18:00", enabled=True):
+    return SimpleNamespace(digest=DigestConfig(enabled=enabled, time=time),
+                           repost_window_days=60)
+
+
+class TestDigestScheduler:
+    def test_next_fire_is_future_occurrence(self):
+        now = datetime.now().astimezone()
+        soon = (now + timedelta(minutes=5)).strftime("%H:%M")
+        earlier = (now - timedelta(minutes=5)).strftime("%H:%M")
+
+        fire_soon = DigestScheduler._next_fire(_digest_cfg(time=soon))
+        assert timedelta(0) < fire_soon - now <= timedelta(minutes=6)
+
+        fire_earlier = DigestScheduler._next_fire(_digest_cfg(time=earlier))
+        assert timedelta(hours=23) < fire_earlier - now < timedelta(hours=24)
+
+    def test_disabled_idles_but_manual_trigger_runs(self):
+        async def scenario():
+            sched = DigestScheduler(Path("unused.yaml"), Path("unused.db"))
+            sched._load_config = lambda: _digest_cfg(enabled=False)
+            runs = []
+            sched._run_sync = lambda cfg: runs.append(cfg)
+            await sched.start()
+            await asyncio.sleep(0.05)
+            assert runs == []
+            assert sched.next_run_at is None
+            sched.trigger_now()  # test-drive the digest before enabling it
+            await _until(lambda: len(runs) == 1)
+            await sched.stop()
+        asyncio.run(scenario())
+
+    def test_enabled_schedules_next_fire(self):
+        async def scenario():
+            sched = DigestScheduler(Path("unused.yaml"), Path("unused.db"))
+            sched._load_config = lambda: _digest_cfg(time="00:00")
+            runs = []
+            sched._run_sync = lambda cfg: runs.append(cfg)
+            await sched.start()
+            await _until(lambda: sched.next_run_at is not None)
+            assert runs == []  # not due yet
+            await sched.stop()
+        asyncio.run(scenario())
+
+    def test_invalid_config_idles(self):
+        async def scenario():
+            sched = DigestScheduler(Path("unused.yaml"), Path("unused.db"))
+            sched._load_config = lambda: None
+            runs = []
+            sched._run_sync = lambda cfg: runs.append(cfg)
+            await sched.start()
+            await asyncio.sleep(0.05)
+            sched.trigger_now()
+            await asyncio.sleep(0.05)
+            assert runs == []  # nothing to run without a config
             await sched.stop()
         asyncio.run(scenario())

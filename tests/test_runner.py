@@ -79,6 +79,32 @@ class TestRunOnce:
         assert result.match_count == 0
         assert store.recent_matches() == []
 
+    def test_linkedin_date_backfilled_for_match(self, monkeypatch):
+        job = _job(site="linkedin", location="Remote", remote_by_facet=False,
+                   date_posted=None)
+        monkeypatch.setattr(runner, "linkedin_posted_date", lambda j: "2026-07-05")
+        result, store = self._run(monkeypatch, [job])
+        assert store.recent_matches()[0]["date_posted"] == "2026-07-05"
+
+    def test_backfill_skipped_when_date_present(self, monkeypatch):
+        job = _job(site="linkedin", location="Remote", remote_by_facet=False,
+                   date_posted="2026-07-01")
+        called = []
+        monkeypatch.setattr(runner, "linkedin_posted_date",
+                            lambda j: called.append(1) or "x")
+        result, store = self._run(monkeypatch, [job])
+        assert called == []  # not re-fetched
+        assert store.recent_matches()[0]["date_posted"] == "2026-07-01"
+
+    def test_backfill_only_for_linkedin(self, monkeypatch):
+        job = _job(site="indeed", location="Remote", remote_by_facet=False,
+                   date_posted=None)
+        called = []
+        monkeypatch.setattr(runner, "linkedin_posted_date",
+                            lambda j: called.append(1) or "x")
+        self._run(monkeypatch, [job])
+        assert called == []  # indeed matches never trigger the LinkedIn fetch
+
     def test_seen_job_skipped_but_remarked(self, monkeypatch):
         job = _job(site="indeed", remote_by_facet=False)
         store = Store(":memory:")
@@ -105,7 +131,36 @@ class TestRunOnce:
         cfg = _app_cfg(filters={"title_include": ["(?i)platform"],
                                 "locations_allow": ["remote"]})
         job = _job(location="Austin, TX", is_remote=True, remote_by_facet=True)
-        monkeypatch.setattr(runner, "linkedin_says_remote", lambda j: False)
+        monkeypatch.setattr(runner, "linkedin_says_remote",
+                            lambda j, attempts=3: False)
         result, store = self._run(monkeypatch, [job], cfg=cfg)
         assert result.match_count == 0
         assert store.recent_matches() == []
+
+    def test_inconclusive_verification_drops_by_default(self, monkeypatch):
+        cfg = _app_cfg(filters={"title_include": ["(?i)platform"],
+                                "locations_allow": ["remote"]})
+        job = _job(location="Austin, TX", is_remote=True, remote_by_facet=True)
+        monkeypatch.setattr(runner, "linkedin_says_remote",
+                            lambda j, attempts=3: None)
+        result, store = self._run(monkeypatch, [job], cfg=cfg)
+        assert result.match_count == 0  # fail_closed default
+
+    def test_inconclusive_verification_kept_when_fail_open(self, monkeypatch):
+        cfg = _app_cfg(filters={"title_include": ["(?i)platform"],
+                                "locations_allow": ["remote"]},
+                       remote_verification_policy="fail_open")
+        job = _job(location="Austin, TX", is_remote=True, remote_by_facet=True)
+        monkeypatch.setattr(runner, "linkedin_says_remote",
+                            lambda j, attempts=3: None)
+        result, store = self._run(monkeypatch, [job], cfg=cfg)
+        assert result.match_count == 1
+
+    def test_confirmed_remote_kept_under_fail_closed(self, monkeypatch):
+        cfg = _app_cfg(filters={"title_include": ["(?i)platform"],
+                                "locations_allow": ["remote"]})
+        job = _job(location="Austin, TX", is_remote=True, remote_by_facet=True)
+        monkeypatch.setattr(runner, "linkedin_says_remote",
+                            lambda j, attempts=3: True)
+        result, store = self._run(monkeypatch, [job], cfg=cfg)
+        assert result.match_count == 1

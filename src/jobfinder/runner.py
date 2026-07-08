@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from .config import AppConfig
 from .filters import Job, Match, evaluate, location_matches
 from .notify import Notifier, NotifyError
-from .scraper import fetch_jobs, linkedin_says_remote
+from .scraper import fetch_jobs, linkedin_posted_date, linkedin_says_remote
 from .store import Store
 
 log = logging.getLogger("jobfinder")
@@ -59,13 +59,21 @@ def run_once(cfg: AppConfig, store: Store, notifier: Notifier,
                     continue
                 match = evaluate(job, cfg.filters)
                 if match and _needs_remote_verification(job, cfg):
-                    if linkedin_says_remote(job) is False:
-                        log.info("dropping %s @ %s (%s): linkedin lists it as "
-                                 "hybrid/on-site, not remote",
-                                 job.title, job.company, job.location)
+                    verdict = linkedin_says_remote(job, attempts=5)
+                    fail_closed = cfg.remote_verification_policy == "fail_closed"
+                    if verdict is False or (verdict is None and fail_closed):
+                        log.info("dropping %s @ %s (%s): %s",
+                                 job.title, job.company, job.location,
+                                 "linkedin lists it as hybrid/on-site, not remote"
+                                 if verdict is False else
+                                 "remoteness could not be verified (fail_closed)")
                         job.is_remote = False
                         match = evaluate(job, cfg.filters)
                 if match:
+                    # JobSpy omits date_posted for hours_old-filtered LinkedIn
+                    # results; backfill it (matches only, so the cost is small).
+                    if job.site == "linkedin" and not job.date_posted:
+                        job.date_posted = linkedin_posted_date(job)
                     if not dry_run:
                         store.mark_matched(match)
                     matches.append(match)

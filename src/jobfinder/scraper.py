@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -40,6 +41,49 @@ def _fetch_linkedin_description(url: str) -> str | None:
         "div", class_=lambda x: x and "show-more-less-html__markup" in x
     )
     return div.get_text(" ", strip=True) if div else None
+
+
+_POSTED_URL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{}"
+_REL_DATE = re.compile(r"(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago", re.I)
+_REL_DAYS = {"minute": 0, "hour": 0, "day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _relative_to_iso(text: str, today: date | None = None) -> str | None:
+    """Turn LinkedIn's 'posted N units ago' label into an ISO date string."""
+    today = today or date.today()
+    low = text.strip().lower()
+    if not low:
+        return None
+    if "just now" in low or "today" in low or "hour" in low or "minute" in low:
+        return today.isoformat()
+    if "yesterday" in low:
+        return (today - timedelta(days=1)).isoformat()
+    m = _REL_DATE.search(low)
+    if not m:
+        return None
+    return (today - timedelta(days=_REL_DAYS[m.group(2)] * int(m.group(1)))).isoformat()
+
+
+def linkedin_posted_date(job: Job) -> str | None:
+    """Scrape LinkedIn's 'posted N ago' label into an ISO date.
+
+    JobSpy leaves date_posted empty on hours_old-filtered LinkedIn searches, so
+    backfill it from the guest job-posting page (which still shows the relative
+    posting time). hours_old keeps matched jobs recent, so the relative label
+    resolves to the right day.
+    """
+    job_id = re.sub(r"\D", "", job.id or "")
+    if not job_id:
+        return None
+    try:
+        resp = requests.get(_POSTED_URL.format(job_id),
+                            headers={"User-Agent": _BROWSER_UA}, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
+    span = BeautifulSoup(resp.text, "html.parser").find(
+        class_=lambda c: c and "posted-time-ago__text" in c)
+    return _relative_to_iso(span.get_text(strip=True)) if span else None
 
 
 _GUEST_SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
@@ -134,6 +178,7 @@ def _row_to_job(row: dict, assume_remote: bool = False) -> Job:
         currency=_clean(row.get("currency")),
         salary_source=_clean(row.get("salary_source")),
         date_posted=str(_clean(row.get("date_posted")) or "") or None,
+        description=str(description) if description else None,
     )
     if job.min_amount is None and job.max_amount is None:
         parsed = parse_salary_text(str(description)) if description else None

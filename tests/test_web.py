@@ -15,6 +15,7 @@ class StubScheduler:
         self.rescheduled = 0
         self.running = False
         self.last_result = None
+        self.last_error = None
         self.next_run_at = None
         self.config_error = None
         self.notify_error = None
@@ -56,7 +57,8 @@ def _client(tmp_path, scheduler=None):
     db_path = tmp_path / "test.db"
     _write_config(config_path)
     scheduler = scheduler or StubScheduler()
-    app = create_app(config_path=config_path, db_path=db_path, scheduler=scheduler)
+    app = create_app(config_path=config_path, db_path=db_path,
+                     scheduler=scheduler, digest_scheduler=StubScheduler())
     return TestClient(app), config_path, db_path, scheduler
 
 
@@ -255,8 +257,28 @@ class TestConfigPage:
         assert raw["poll_interval_minutes"] == 45
         assert raw["repost_window_days"] == 30
 
+    def test_notify_saves_separate_health_channels(self, tmp_path):
+        # digest-only per-run alerts, but health alerts still go to email
+        client, config_path, _, _ = _client(tmp_path)
+        resp = client.post("/config/notify", data={
+            "health_channels": "email", "health_alerts": "on",
+            "digest_threshold": "5", "empty_runs_before_alert": "3",
+        }, follow_redirects=False)  # note: no "channels" field -> []
+        assert resp.status_code == 303
+        raw = yaml.safe_load(config_path.read_text())
+        assert raw["notify"]["channels"] == []
+        assert raw["notify"]["health_channels"] == ["email"]
 
-class TestStatusPage:
+    def test_config_page_renders_resolved_health_channels(self, tmp_path):
+        # With health_channels absent, the checkboxes should reflect channels.
+        client, config_path, _, _ = _client(tmp_path)
+        raw = yaml.safe_load(config_path.read_text())
+        raw["notify"] = {"channels": ["email"]}
+        config_path.write_text(yaml.safe_dump(raw))
+        body = client.get("/config").text
+        # both a channels checkbox and a health_channels checkbox for email
+        assert 'name="channels" value="email"' in body
+        assert 'name="health_channels" value="email"' in body
     def test_secret_values_never_rendered(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUSHOVER_TOKEN", "sekrit-token-value")
         monkeypatch.setenv("SMTP_PASSWORD", "sekrit-password")
@@ -276,3 +298,34 @@ class TestStatusPage:
         resp = client.post("/run")
         assert resp.status_code == 200
         assert scheduler.triggered == 1
+
+    def test_digest_run_now_triggers_digest_scheduler(self, tmp_path):
+        client, _, _, _ = _client(tmp_path)
+        digest_scheduler = client.app.state.digest_scheduler
+        resp = client.post("/digest/run")
+        assert resp.status_code == 200
+        assert digest_scheduler.triggered == 1
+
+
+class TestDigestConfigPage:
+    def test_save_digest_settings_round_trips(self, tmp_path):
+        client, config_path, _, _ = _client(tmp_path)
+        resp = client.post("/config/digest", data={
+            "enabled": "on", "time": "07:30",
+            "model": "claude-opus-4-8", "resume_path": "resume.md",
+        }, follow_redirects=False)
+        assert resp.status_code == 303
+        raw = yaml.safe_load(config_path.read_text())
+        assert raw["digest"] == {"enabled": True, "time": "07:30",
+                                 "model": "claude-opus-4-8",
+                                 "resume_path": "resume.md"}
+        digest_scheduler = client.app.state.digest_scheduler
+        assert digest_scheduler.rescheduled == 1
+
+    def test_bad_digest_time_rejected(self, tmp_path):
+        client, config_path, _, _ = _client(tmp_path)
+        before = config_path.read_text()
+        resp = client.post("/config/digest", data={"time": "25:99"})
+        assert resp.status_code == 422
+        assert "digest.time" in resp.text
+        assert config_path.read_text() == before

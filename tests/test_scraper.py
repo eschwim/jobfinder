@@ -1,9 +1,71 @@
+from datetime import date
+
 import pandas as pd
 
 from jobfinder import scraper
 from jobfinder.config import SearchSpec
 from jobfinder.filters import Job
-from jobfinder.scraper import _row_to_job, fetch_jobs, linkedin_says_remote
+from jobfinder.scraper import (
+    _relative_to_iso,
+    _row_to_job,
+    fetch_jobs,
+    linkedin_posted_date,
+    linkedin_says_remote,
+)
+
+
+class TestRelativeDate:
+    _T = date(2026, 7, 8)
+
+    def test_hours_and_minutes_are_today(self):
+        assert _relative_to_iso("20 hours ago", self._T) == "2026-07-08"
+        assert _relative_to_iso("45 minutes ago", self._T) == "2026-07-08"
+        assert _relative_to_iso("just now", self._T) == "2026-07-08"
+
+    def test_days_weeks_months(self):
+        assert _relative_to_iso("3 days ago", self._T) == "2026-07-05"
+        assert _relative_to_iso("2 weeks ago", self._T) == "2026-06-24"
+        assert _relative_to_iso("1 month ago", self._T) == "2026-06-08"
+
+    def test_yesterday(self):
+        assert _relative_to_iso("Yesterday", self._T) == "2026-07-07"
+
+    def test_unparseable_returns_none(self):
+        assert _relative_to_iso("reposted recently", self._T) is None
+        assert _relative_to_iso("", self._T) is None
+
+
+class TestLinkedinPostedDate:
+    def _resp(self, html):
+        class R:
+            text = html
+            def raise_for_status(self): pass
+        return R()
+
+    def test_parses_posted_span(self, monkeypatch):
+        html = ('<span class="posted-time-ago__text">3 days ago</span>')
+        monkeypatch.setattr(scraper.requests, "get", lambda *a, **k: self._resp(html))
+        monkeypatch.setattr(scraper, "_relative_to_iso",
+                            lambda text, today=None: f"parsed:{text}")
+        job = Job(id="li-123", title="t", company="c", site="linkedin")
+        assert linkedin_posted_date(job) == "parsed:3 days ago"
+
+    def test_no_span_returns_none(self, monkeypatch):
+        monkeypatch.setattr(scraper.requests, "get",
+                            lambda *a, **k: self._resp("<html></html>"))
+        job = Job(id="li-123", title="t", company="c", site="linkedin")
+        assert linkedin_posted_date(job) is None
+
+    def test_non_numeric_id_returns_none(self):
+        assert linkedin_posted_date(Job(id="", title="t", company="c")) is None
+
+    def test_request_failure_returns_none(self, monkeypatch):
+        import requests
+        def boom(*a, **k):
+            raise requests.RequestException("nope")
+        monkeypatch.setattr(scraper.requests, "get", boom)
+        job = Job(id="li-9", title="t", company="c", site="linkedin")
+        assert linkedin_posted_date(job) is None
 
 
 def _row(**kwargs) -> dict:

@@ -35,11 +35,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         channels = [] if args.dry_run else build_channels(cfg)
+        health_channels = ([] if args.dry_run
+                           else build_channels(cfg, cfg.notify.resolved_health_channels()))
     except NotifyError as exc:
         log.error("%s", exc)
         return 2
-    notifier = Notifier(channels, dry_run=args.dry_run)
-    log.info("notification channels: %s%s", ", ".join(cfg.notify.channels),
+    notifier = Notifier(channels, health_channels, dry_run=args.dry_run)
+    log.info("alert channels: %s | health channels: %s%s",
+             ", ".join(cfg.notify.channels) or "(none)",
+             ", ".join(cfg.notify.resolved_health_channels()) or "(none)",
              " (dry-run)" if args.dry_run else "")
 
     if args.test_notify:

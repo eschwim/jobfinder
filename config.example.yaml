@@ -55,12 +55,27 @@ filters:
     currency: USD
     keep_unlisted: true   # postings with no salary data still alert, flagged "salary unlisted"
 
+# Daily digest email: compares the day's matches against your resume via the
+# Claude API and groups them into strong/weak/no match. Needs ANTHROPIC_API_KEY
+# in .env and the email channel configured. resume_path is resolved relative to
+# this file's directory when not absolute.
+digest:
+  enabled: false
+  time: "18:00"          # local time, HH:MM
+  model: claude-opus-4-8
+  resume_path: resume.md
+
 notify:
-  # Enable one or both. pushover needs PUSHOVER_* in .env; email needs SMTP_* / EMAIL_TO.
+  # Per-run match alerts. pushover needs PUSHOVER_* in .env; email needs SMTP_*.
+  # Leave empty ([]) for digest-only — no per-run alerts.
   channels: [pushover, email]
+  # Channels for site-health alerts. Omit to reuse `channels`; set explicitly to
+  # decouple them — e.g. channels: [] with health_channels: [email] gets you the
+  # daily digest plus health warnings but no per-run match spam.
+  # health_channels: [email]
   digest_threshold: 5     # pushover only: more matches than this in one run -> single digest push
                           # (email always sends one message per run with all matches)
-  health_alerts: true     # low-priority notification when a site looks broken
+  health_alerts: true     # master switch for health alerts (via health_channels)
   empty_runs_before_alert: 3
 
 # Boards (LinkedIn especially) repost the same role under a fresh job id, often
@@ -71,3 +86,9 @@ repost_window_days: 60
 # Minutes between poll cycles (web app scheduler). Keep hours_old above
 # slightly larger than this so consecutive runs overlap; overlap is deduped.
 poll_interval_minutes: 120
+
+# LinkedIn's remote facet leaks hybrid/on-site jobs, so facet-only remote
+# matches are re-verified against LinkedIn's own workplace-type data. That
+# check is sometimes inconclusive: fail_closed drops the job (no false-remote
+# alerts, may rarely miss a real one), fail_open keeps it.
+remote_verification_policy: fail_closed

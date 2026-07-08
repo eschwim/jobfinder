@@ -33,7 +33,7 @@ WINDOWS: dict[str, int | None] = {"24h": 24, "3d": 72, "7d": 168, "30d": 720, "a
 KNOWN_SITES = ["indeed", "linkedin", "google", "zip_recruiter", "glassdoor"]
 
 SECRET_VARS = ["PUSHOVER_TOKEN", "PUSHOVER_USER", "SMTP_USER", "SMTP_PASSWORD",
-               "EMAIL_FROM", "EMAIL_TO"]
+               "EMAIL_FROM", "EMAIL_TO", "ANTHROPIC_API_KEY"]
 
 
 def _rel_time(iso: str | None) -> str:
@@ -156,15 +156,24 @@ def _raw_config(request: Request) -> dict:
 
 def _config_page(request: Request, raw: dict, error: str | None = None,
                  saved: bool = False, status_code: int = 200):
+    notify = raw.get("notify") or {}
+    # health_channels absent (None) inherits the per-run channels; render that
+    # resolved value so the checkboxes reflect the effective config.
+    health_channels = notify.get("health_channels")
+    if health_channels is None:
+        health_channels = notify.get("channels") or []
     return templates.TemplateResponse(request, "config.html", {
         "raw": raw, "error": error, "saved": saved,
         "known_sites": KNOWN_SITES, "known_channels": sorted(KNOWN_CHANNELS),
         "searches": raw.get("searches") or [],
         "filters": raw.get("filters") or {},
         "salary": (raw.get("filters") or {}).get("salary") or {},
-        "notify": raw.get("notify") or {},
+        "notify": notify,
+        "health_channels": health_channels,
+        "digest": raw.get("digest") or {},
         "repost_window_days": raw.get("repost_window_days", 60),
         "poll_interval_minutes": raw.get("poll_interval_minutes", 120),
+        "remote_verification_policy": raw.get("remote_verification_policy", "fail_closed"),
     }, status_code=status_code)
 
 
@@ -176,9 +185,10 @@ def _save(request: Request, raw: dict):
         save_config(request.app.state.config_path, raw)
     except ConfigError as exc:
         return _config_page(request, raw, error=str(exc), status_code=422)
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None:
-        scheduler.reschedule()
+    for name in ("scheduler", "digest_scheduler"):
+        sched = getattr(request.app.state, name, None)
+        if sched is not None:
+            sched.reschedule()
     return RedirectResponse("/config?saved=1", status_code=303)
 
 
@@ -278,6 +288,7 @@ async def save_notify(request: Request):
     form = await request.form()
     notify = raw.get("notify") or {}
     notify["channels"] = form.getlist("channels")
+    notify["health_channels"] = form.getlist("health_channels")
     threshold = _int_or_none(form.get("digest_threshold", ""))
     if threshold is not None:
         notify["digest_threshold"] = threshold
@@ -289,6 +300,22 @@ async def save_notify(request: Request):
     return _save(request, raw)
 
 
+@router.post("/config/digest")
+async def save_digest_config(request: Request):
+    raw = _raw_config(request)
+    form = await request.form()
+    digest = raw.get("digest") or {}
+    digest["enabled"] = bool(form.get("enabled"))
+    if form.get("time", "").strip():
+        digest["time"] = form.get("time").strip()
+    if form.get("model", "").strip():
+        digest["model"] = form.get("model").strip()
+    if form.get("resume_path", "").strip():
+        digest["resume_path"] = form.get("resume_path").strip()
+    raw["digest"] = digest
+    return _save(request, raw)
+
+
 @router.post("/config/general")
 async def save_general(request: Request):
     raw = _raw_config(request)
@@ -297,6 +324,8 @@ async def save_general(request: Request):
         value = _int_or_none(form.get(key, ""))
         if value is not None:
             raw[key] = value
+    if form.get("remote_verification_policy", "").strip():
+        raw["remote_verification_policy"] = form.get("remote_verification_policy").strip()
     return _save(request, raw)
 
 
@@ -307,7 +336,9 @@ def _status_context(request: Request, store: Store) -> dict:
     last_run = store.last_run()
     return {
         "scheduler": scheduler,
+        "digest_scheduler": getattr(request.app.state, "digest_scheduler", None),
         "last_run": last_run,
+        "last_digest": store.last_digest(),
         "site_health": store.site_health(),
         "secrets": {name: bool(os.environ.get(name)) for name in SECRET_VARS},
         "now": datetime.now(timezone.utc),
@@ -335,14 +366,31 @@ async def run_now(request: Request, store: Store = Depends(get_store)):
                                       _status_context(request, store))
 
 
+@router.post("/digest/run")
+async def run_digest_now(request: Request, store: Store = Depends(get_store)):
+    scheduler = getattr(request.app.state, "digest_scheduler", None)
+    if scheduler is not None:
+        scheduler.trigger_now()
+    return templates.TemplateResponse(request, "_status_panel.html",
+                                      _status_context(request, store))
+
+
 @router.post("/test-notify")
 async def test_notify(request: Request, store: Store = Depends(get_store)):
     context = _status_context(request, store)
     try:
         cfg = load_config(request.app.state.config_path)
-        notifier = Notifier(build_channels(cfg))
-        await asyncio.to_thread(notifier.test)
-        context["test_notify_result"] = "test notification sent"
+        # Test every channel configured for either alerts or health, so a
+        # digest-only-with-health-alerts setup can still be verified.
+        names = list(dict.fromkeys(
+            cfg.notify.channels + cfg.notify.resolved_health_channels()))
+        channels = build_channels(cfg, names)
+        if not channels:
+            context["test_notify_result"] = "failed: no notification channels enabled"
+        else:
+            notifier = Notifier(channels)
+            await asyncio.to_thread(notifier.test)
+            context["test_notify_result"] = "test notification sent"
     except (ConfigError, NotifyError) as exc:
         context["test_notify_result"] = f"failed: {exc}"
     return templates.TemplateResponse(request, "_status_panel.html", context)

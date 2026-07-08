@@ -56,9 +56,27 @@ KNOWN_CHANNELS = {"pushover", "email"}
 @dataclass
 class NotifyConfig:
     channels: list[str] = field(default_factory=lambda: ["pushover"])
+    # Channels for site-health alerts. None means "same as channels" (so
+    # existing configs are unchanged); set it explicitly to decouple the two —
+    # e.g. channels: [] (digest-only) but health_channels: [email].
+    health_channels: list[str] | None = None
     digest_threshold: int = 5
     health_alerts: bool = True
     empty_runs_before_alert: int = 3
+
+    def resolved_health_channels(self) -> list[str]:
+        return list(self.channels if self.health_channels is None
+                    else self.health_channels)
+
+
+@dataclass
+class DigestConfig:
+    """Daily resume-matched digest email, sent via the Claude API."""
+    enabled: bool = False
+    time: str = "18:00"            # local (container) time, HH:MM
+    model: str = "claude-opus-4-8"
+    # Resolved relative to the config file's directory when not absolute.
+    resume_path: str = "resume.md"
 
 
 @dataclass
@@ -68,11 +86,16 @@ class AppConfig:
     notify: NotifyConfig
     pushover_token: str | None
     pushover_user: str | None
+    digest: DigestConfig = field(default_factory=DigestConfig)
+    anthropic_api_key: str | None = None
     # Suppress reposts of an already-alerted role (same company+title) for this
     # many days after its last sighting; 0 disables repost detection.
     repost_window_days: int = 60
     # Minutes between poll cycles when running the web app's scheduler.
     poll_interval_minutes: int = 120
+    # When the LinkedIn remote re-verification is inconclusive (the guest
+    # endpoint is flaky): "fail_closed" drops the job, "fail_open" keeps it.
+    remote_verification_policy: str = "fail_closed"
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
     smtp_user: str | None = None
@@ -177,8 +200,13 @@ def parse_config(raw: dict) -> AppConfig:
     if unknown:
         raise ConfigError(f"unknown notify.channels: {sorted(unknown)} "
                           f"(known: {sorted(KNOWN_CHANNELS)})")
-    if not notify.channels:
-        raise ConfigError("notify.channels must list at least one channel")
+    # An empty channels list is valid: per-run alerts are disabled, e.g. when
+    # relying on the daily digest alone.
+    if notify.health_channels is not None:
+        unknown_h = set(notify.health_channels) - KNOWN_CHANNELS
+        if unknown_h:
+            raise ConfigError(f"unknown notify.health_channels: {sorted(unknown_h)} "
+                              f"(known: {sorted(KNOWN_CHANNELS)})")
 
     repost_window_days = raw.get("repost_window_days", 60)
     if not isinstance(repost_window_days, int) or isinstance(repost_window_days, bool) \
@@ -190,12 +218,27 @@ def parse_config(raw: dict) -> AppConfig:
             or poll_interval_minutes < 1:
         raise ConfigError("poll_interval_minutes must be a positive integer")
 
+    remote_verification_policy = raw.get("remote_verification_policy", "fail_closed")
+    if remote_verification_policy not in ("fail_closed", "fail_open"):
+        raise ConfigError("remote_verification_policy must be 'fail_closed' or "
+                          f"'fail_open', got {remote_verification_policy!r}")
+
+    try:
+        digest = DigestConfig(**(raw.get("digest") or {}))
+    except TypeError as exc:
+        raise ConfigError(f"digest section is invalid: {exc}") from exc
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(digest.time)):
+        raise ConfigError(f"digest.time must be HH:MM (24h), got {digest.time!r}")
+
     return AppConfig(
         searches=searches,
         filters=filters,
         notify=notify,
         repost_window_days=repost_window_days,
         poll_interval_minutes=poll_interval_minutes,
+        remote_verification_policy=remote_verification_policy,
+        digest=digest,
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
         pushover_token=os.environ.get("PUSHOVER_TOKEN"),
         pushover_user=os.environ.get("PUSHOVER_USER"),
         smtp_host=os.environ.get("SMTP_HOST", "smtp.gmail.com"),

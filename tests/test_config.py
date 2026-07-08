@@ -47,6 +47,37 @@ class TestParseConfig:
         with pytest.raises(ConfigError, match=r"\(unclosed"):
             parse_config(raw)
 
+    def test_empty_channels_allowed_for_digest_only(self):
+        # No per-run alert channels is valid — e.g. relying on the daily digest.
+        cfg = parse_config(_raw(notify={"channels": []}))
+        assert cfg.notify.channels == []
+
+    def test_unknown_channel_still_rejected(self):
+        with pytest.raises(ConfigError, match="unknown notify.channels"):
+            parse_config(_raw(notify={"channels": ["carrier-pigeon"]}))
+
+    def test_health_channels_default_inherit_channels(self):
+        cfg = parse_config(_raw(notify={"channels": ["email"]}))
+        assert cfg.notify.health_channels is None
+        assert cfg.notify.resolved_health_channels() == ["email"]
+
+    def test_health_channels_decoupled_from_channels(self):
+        # The digest-only-with-health case: no match alerts, health to email.
+        cfg = parse_config(_raw(notify={"channels": [],
+                                        "health_channels": ["email"]}))
+        assert cfg.notify.channels == []
+        assert cfg.notify.resolved_health_channels() == ["email"]
+
+    def test_health_channels_can_be_explicitly_empty(self):
+        cfg = parse_config(_raw(notify={"channels": ["email"],
+                                        "health_channels": []}))
+        assert cfg.notify.resolved_health_channels() == []
+
+    def test_unknown_health_channel_rejected(self):
+        with pytest.raises(ConfigError, match="unknown notify.health_channels"):
+            parse_config(_raw(notify={"channels": ["email"],
+                                      "health_channels": ["smoke-signal"]}))
+
 
 class TestSaveConfig:
     def test_round_trip(self, tmp_path):
@@ -78,3 +109,16 @@ class TestSaveConfig:
         path.write_text("# a comment\n" + yaml.safe_dump(_raw()))
         save_config(path, load_raw_config(path))
         assert "# a comment" not in path.read_text()
+
+
+class TestRemoteVerificationPolicy:
+    def test_default_fail_closed(self):
+        assert parse_config(_raw()).remote_verification_policy == "fail_closed"
+
+    def test_fail_open_accepted(self):
+        raw = _raw(remote_verification_policy="fail_open")
+        assert parse_config(raw).remote_verification_policy == "fail_open"
+
+    def test_unknown_value_rejected(self):
+        with pytest.raises(ConfigError, match="remote_verification_policy"):
+            parse_config(_raw(remote_verification_policy="maybe"))

@@ -36,6 +36,38 @@
   </div>
 
   <div class="card">
+    <h2>Daily digest</h2>
+    {% if digest_scheduler %}
+      {% if digest_scheduler.last_error %}
+      <div class="banner warn">Last digest attempt failed:
+        {{ digest_scheduler.last_error }}</div>
+      {% endif %}
+      <dl>
+        <dt>State</dt>
+        <dd>{{ 'sending…' if digest_scheduler.running else 'idle' }}</dd>
+        <dt>Next digest</dt>
+        <dd>{% if digest_scheduler.running %}—{% elif digest_scheduler.next_run_at %}
+            {{ digest_scheduler.next_run_at.strftime('%Y-%m-%d %H:%M %Z') }}
+            {% else %}disabled{% endif %}</dd>
+        {% if last_digest %}
+        <dt>Last digest</dt>
+        <dd title="{{ last_digest['sent_at'] }}">{{ last_digest['sent_at']|rel_time }}
+            {% if last_digest['error'] %}(failed: {{ last_digest['error'] }})
+            {% else %}— {{ last_digest['matches'] }} job(s):
+            {{ last_digest['strong'] }} strong / {{ last_digest['weak'] }} weak /
+            {{ last_digest['none'] }} no match{% endif %}</dd>
+        {% endif %}
+      </dl>
+    {% else %}
+      <p class="empty">Digest scheduler not running.</p>
+    {% endif %}
+    <div class="actions">
+      <button hx-post="/digest/run" hx-target="#status-panel" hx-swap="outerHTML">
+        Send digest now</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Last run</h2>
     {% if last_run %}
     <dl>

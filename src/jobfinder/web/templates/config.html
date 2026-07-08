@@ -103,10 +103,18 @@ config.yaml are not preserved when saving from this page.</p>
   <h2>Notifications</h2>
   <form method="post" action="/config/notify" class="card">
     <fieldset>
-      <legend>Channels</legend>
+      <legend>Match alert channels (per-run; uncheck all for digest-only)</legend>
       {% for channel in known_channels %}
       <label class="check"><input type="checkbox" name="channels" value="{{ channel }}"
              {{ 'checked' if channel in (notify.get('channels') or []) else '' }}> {{ channel }}</label>
+      {% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Site-health alert channels (independent — keep these even with no
+        match alerts)</legend>
+      {% for channel in known_channels %}
+      <label class="check"><input type="checkbox" name="health_channels" value="{{ channel }}"
+             {{ 'checked' if channel in health_channels else '' }}> {{ channel }}</label>
       {% endfor %}
     </fieldset>
     <div class="grid">
@@ -119,8 +127,27 @@ config.yaml are not preserved when saving from this page.</p>
     </div>
     <label class="check"><input type="checkbox" name="health_alerts"
            {{ 'checked' if notify.get('health_alerts', True) else '' }}>
-           Alert when a site looks broken</label>
+           Alert when a site looks broken (master switch for the health channels above)</label>
     <div class="actions"><button type="submit">Save notifications</button></div>
+  </form>
+</section>
+
+<section>
+  <h2>Daily digest</h2>
+  <form method="post" action="/config/digest" class="card">
+    <label class="check"><input type="checkbox" name="enabled"
+           {{ 'checked' if digest.get('enabled') else '' }}>
+           Send a daily email grading the day's matches against your resume
+           (strong / weak / no match, via the Claude API — needs ANTHROPIC_API_KEY)</label>
+    <div class="grid">
+      <label>Send time (24h, container-local)
+        <input name="time" value="{{ digest.get('time', '18:00') }}" placeholder="18:00"></label>
+      <label>Claude model
+        <input name="model" value="{{ digest.get('model', 'claude-opus-4-8') }}"></label>
+      <label>Resume path (relative to config dir)
+        <input name="resume_path" value="{{ digest.get('resume_path', 'resume.md') }}"></label>
+    </div>
+    <div class="actions"><button type="submit">Save digest settings</button></div>
   </form>
 </section>
 
@@ -134,6 +161,13 @@ config.yaml are not preserved when saving from this page.</p>
       <label>Repost suppression window (days, 0 disables)
         <input name="repost_window_days" type="number" min="0"
                value="{{ repost_window_days }}"></label>
+      <label>When LinkedIn remote verification is inconclusive
+        <select name="remote_verification_policy">
+          <option value="fail_closed" {{ 'selected' if remote_verification_policy != 'fail_open' else '' }}>
+            fail closed — drop the job</option>
+          <option value="fail_open" {{ 'selected' if remote_verification_policy == 'fail_open' else '' }}>
+            fail open — keep it as remote</option>
+        </select></label>
     </div>
     <div class="actions"><button type="submit">Save general</button></div>
   </form>

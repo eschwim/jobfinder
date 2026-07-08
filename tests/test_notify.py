@@ -1,5 +1,5 @@
 from jobfinder.filters import Job, Match
-from jobfinder.notify import email_bodies, location_str, salary_str
+from jobfinder.notify import Notifier, email_bodies, location_str, salary_str
 
 
 def _match(**kwargs) -> Match:
@@ -7,6 +7,45 @@ def _match(**kwargs) -> Match:
                     url="https://example.com/job/1", location="Seattle, WA")
     defaults.update(kwargs)
     return Match(Job(**defaults))
+
+
+class _FakeChannel:
+    def __init__(self, name):
+        self.name = name
+        self.calls = []
+
+    def alert_matches(self, matches, digest_threshold):
+        self.calls.append("alert_matches")
+
+    def health_alert(self, site, empty_runs):
+        self.calls.append("health_alert")
+
+    def test_message(self):
+        self.calls.append("test_message")
+
+
+class TestNotifierChannelSplit:
+    def test_health_alerts_use_health_channels_not_alert_channels(self):
+        alerts, health = _FakeChannel("alerts"), _FakeChannel("health")
+        n = Notifier([alerts], health_channels=[health])
+        n.alert_matches([_match()], digest_threshold=5)
+        n.health_alert("indeed", 3)
+        assert alerts.calls == ["alert_matches"]
+        assert health.calls == ["health_alert"]
+
+    def test_digest_only_still_sends_health(self):
+        # No per-run alert channels, but a health channel is configured.
+        health = _FakeChannel("health")
+        n = Notifier([], health_channels=[health])
+        n.alert_matches([_match()], digest_threshold=5)  # no alert channels: no-op
+        n.health_alert("indeed", 3)
+        assert health.calls == ["health_alert"]
+
+    def test_health_channels_default_to_alert_channels(self):
+        ch = _FakeChannel("both")
+        n = Notifier([ch])  # health_channels omitted -> inherits [ch]
+        n.health_alert("indeed", 3)
+        assert ch.calls == ["health_alert"]
 
 
 class TestEmailBodies:
