@@ -1,3 +1,4 @@
+import html
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,9 +9,11 @@ import pytest
 import jobfinder.digest as digest
 from jobfinder.config import parse_config
 from jobfinder.digest import (
+    Assessment,
     DigestError,
     DigestResult,
     digest_bodies,
+    etc_str,
     evaluate_matches,
     send_digest,
     _sorted_by_max_salary,
@@ -95,16 +98,37 @@ class TestEvaluateMatches:
 
     def test_grades_parsed_by_id(self, monkeypatch):
         captured = self._fake_anthropic(monkeypatch, {"assessments": [
-            {"id": "li-1", "category": "strong", "reason": "K8s + SLOs"},
-            {"id": "li-2", "category": "none", "reason": "frontend role"},
+            {"id": "li-1", "category": "strong", "reason": "K8s + SLOs",
+             "etc_min_usd": 250000, "etc_max_usd": 380000,
+             "etc_confidence": 70, "etc_note": "base + big-tech RSUs"},
+            {"id": "li-2", "category": "none", "reason": "frontend role",
+             "etc_min_usd": 150000, "etc_max_usd": 200000,
+             "etc_confidence": 30, "etc_note": "market inference"},
         ]})
         graded = evaluate_matches("resume", [_job(1), _job(2)],
                                   "claude-opus-4-8", "key")
-        assert graded["li-1"] == ("strong", "K8s + SLOs")
-        assert graded["li-2"][0] == "none"
+        a = graded["li-1"]
+        assert (a.category, a.reason) == ("strong", "K8s + SLOs")
+        assert (a.etc_min, a.etc_max, a.etc_confidence) == (250000, 380000, 70)
+        assert a.etc_note == "base + big-tech RSUs"
+        assert graded["li-2"].category == "none"
         assert captured["model"] == "claude-opus-4-8"
         assert captured["api_key"] == "key"
         assert "resume" in captured["messages"][0]["content"]
+
+    def test_missing_etc_fields_tolerated(self, monkeypatch):
+        # Defensive: schema requires them, but don't crash if absent/garbage.
+        self._fake_anthropic(monkeypatch, {"assessments": [
+            {"id": "li-1", "category": "weak", "reason": "partial"}]})
+        a = evaluate_matches("r", [_job(1)], "m", "k")["li-1"]
+        assert (a.etc_min, a.etc_max, a.etc_confidence) == (None, None, None)
+
+    def test_confidence_clamped_to_0_100(self, monkeypatch):
+        self._fake_anthropic(monkeypatch, {"assessments": [
+            {"id": "li-1", "category": "weak", "reason": "r",
+             "etc_min_usd": 1, "etc_max_usd": 2,
+             "etc_confidence": 250, "etc_note": ""}]})
+        assert evaluate_matches("r", [_job(1)], "m", "k")["li-1"].etc_confidence == 100
 
     def test_invalid_category_dropped(self, monkeypatch):
         self._fake_anthropic(monkeypatch, {"assessments": [
@@ -118,11 +142,28 @@ class TestEvaluateMatches:
             evaluate_matches("r", [_job(1)], "m", "k")
 
 
+class TestEtcStr:
+    def test_range_with_confidence(self):
+        a = Assessment(etc_min=250000, etc_max=380000, etc_confidence=70)
+        assert etc_str(a) == "ETC 250,000–380,000 USD/yr (confidence 70%)"
+
+    def test_point_estimate(self):
+        a = Assessment(etc_min=300000, etc_max=300000, etc_confidence=55)
+        assert etc_str(a) == "ETC 300,000 USD/yr (confidence 55%)"
+
+    def test_missing_estimate(self):
+        assert etc_str(Assessment()) == "ETC not estimated"
+
+    def test_no_confidence_omits_suffix(self):
+        a = Assessment(etc_min=100000, etc_max=120000)
+        assert etc_str(a) == "ETC 100,000–120,000 USD/yr"
+
+
 class TestDigestBodies:
     def test_sections_and_reasons(self):
         groups = {"strong": [_job(1)], "weak": [], "none": [_job(2)]}
-        graded = {"li-1": ("strong", "matches core skills"),
-                  "li-2": ("none", "unrelated domain")}
+        graded = {"li-1": Assessment("strong", "matches core skills"),
+                  "li-2": Assessment("none", "unrelated domain")}
         text, html_body = digest_bodies(groups, graded)
         assert "Strong match (1)" in text
         assert "Weak match (0)" in text
@@ -130,6 +171,21 @@ class TestDigestBodies:
         assert "https://example.com/1" in text
         assert "unrelated domain" in html_body
         assert text.index("SRE 1") < text.index("SRE 2")
+
+    def test_etc_line_with_note_in_both_bodies(self):
+        groups = {"strong": [_job(1)], "weak": [], "none": []}
+        graded = {"li-1": Assessment("strong", "fit", etc_min=280000,
+                                     etc_max=400000, etc_confidence=65,
+                                     etc_note="base + bonus + startup equity")}
+        text, html_body = digest_bodies(groups, graded)
+        expected = "ETC 280,000–400,000 USD/yr (confidence 65%) — base + bonus + startup equity"
+        assert expected in text
+        assert html.escape(expected) in html_body
+
+    def test_ungraded_job_shows_not_estimated(self):
+        groups = {"strong": [], "weak": [], "none": [_job(1)]}
+        text, _ = digest_bodies(groups, {})
+        assert "ETC not estimated" in text
 
 
 class TestSendDigest:
@@ -167,7 +223,7 @@ class TestSendDigest:
         channel = FakeChannel()
         monkeypatch.setattr(digest, "_email_channel", lambda cfg: channel)
         monkeypatch.setattr(digest, "evaluate_matches",
-                            lambda *a, **k: {"li-1": ("strong", "good fit")})
+                            lambda *a, **k: {"li-1": Assessment("strong", "good fit")})
         store = self._store_with_match()
         result = send_digest(cfg, store, tmp_path)
         assert (result.matches, result.strong, result.weak, result.none) == (1, 1, 0, 0)

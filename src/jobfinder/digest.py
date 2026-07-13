@@ -40,8 +40,22 @@ experience.
 
 Judge on substance, not keywords: equivalent technologies count (e.g. any \
 config-management or any major cloud), and skills implied by senior \
-infrastructure roles may be credited where reasonable. Grade every job you \
-are given, by its id."""
+infrastructure roles may be credited where reasonable.
+
+Additionally, estimate each job's total annual compensation (ETC) in USD: \
+base salary plus expected annual bonus, annualized equity value (RSUs or \
+options), and any significant other benefits (401k match, unusually valuable \
+perks). Anchor on figures stated in the posting, then fill the gaps from \
+public knowledge of the employer (size, stage, known compensation practices \
+— e.g. big-tech RSU norms vs startup option grants), the role's seniority, \
+and location-adjusted market rates. Report etc_min_usd/etc_max_usd as a \
+realistic yearly range — the range should widen with uncertainty, not narrow. \
+Set etc_confidence 0-100 for how well the posting plus your knowledge of \
+this specific employer support the estimate (80+: posting states total-comp \
+components or the employer's comp bands are widely known; 40-79: partial \
+figures or a well-understood employer; below 40: mostly generic market \
+inference). In etc_note, name the main components and assumptions in one \
+short clause. Grade every job you are given, by its id."""
 
 _SCHEMA = {
     "type": "object",
@@ -57,8 +71,25 @@ _SCHEMA = {
                         "type": "string",
                         "description": "One sentence: the decisive skill overlaps or gaps",
                     },
+                    "etc_min_usd": {
+                        "type": "integer",
+                        "description": "Estimated total annual compensation, low end, USD/yr",
+                    },
+                    "etc_max_usd": {
+                        "type": "integer",
+                        "description": "Estimated total annual compensation, high end, USD/yr",
+                    },
+                    "etc_confidence": {
+                        "type": "integer",
+                        "description": "0-100: how well the posting + employer knowledge support the estimate",
+                    },
+                    "etc_note": {
+                        "type": "string",
+                        "description": "One short clause: main components/assumptions behind the estimate",
+                    },
                 },
-                "required": ["id", "category", "reason"],
+                "required": ["id", "category", "reason", "etc_min_usd",
+                             "etc_max_usd", "etc_confidence", "etc_note"],
                 "additionalProperties": False,
             },
         }
@@ -78,6 +109,17 @@ class DigestResult:
     strong: int = 0
     weak: int = 0
     none: int = 0
+
+
+@dataclass
+class Assessment:
+    """Claude's per-job grade plus its estimated-total-compensation guess."""
+    category: str = "none"
+    reason: str = ""
+    etc_min: int | None = None
+    etc_max: int | None = None
+    etc_confidence: int | None = None
+    etc_note: str = ""
 
 
 def _row_job(row: sqlite3.Row) -> Job:
@@ -103,9 +145,16 @@ def _jobs_block(jobs: list[Job]) -> str:
     return "\n\n".join(parts)
 
 
+def _to_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def evaluate_matches(resume_text: str, jobs: list[Job], model: str,
-                     api_key: str) -> dict[str, tuple[str, str]]:
-    """Grade jobs against the resume; returns {job_id: (category, reason)}."""
+                     api_key: str) -> dict[str, Assessment]:
+    """Grade jobs against the resume; returns {job_id: Assessment}."""
     client = anthropic.Anthropic(api_key=api_key)
     prompt = (f"<resume>\n{resume_text}\n</resume>\n\n"
               f"Grade the following {len(jobs)} job posting(s) against the resume:"
@@ -135,9 +184,35 @@ def evaluate_matches(resume_text: str, jobs: list[Job], model: str,
 
     graded = {}
     for entry in data.get("assessments", []):
-        if entry.get("category") in CATEGORIES:
-            graded[str(entry.get("id"))] = (entry["category"], entry.get("reason", ""))
+        if entry.get("category") not in CATEGORIES:
+            continue
+        confidence = _to_int(entry.get("etc_confidence"))
+        if confidence is not None:
+            confidence = max(0, min(100, confidence))
+        graded[str(entry.get("id"))] = Assessment(
+            category=entry["category"],
+            reason=entry.get("reason", ""),
+            etc_min=_to_int(entry.get("etc_min_usd")),
+            etc_max=_to_int(entry.get("etc_max_usd")),
+            etc_confidence=confidence,
+            etc_note=str(entry.get("etc_note") or ""),
+        )
     return graded
+
+
+def etc_str(assessment: Assessment) -> str:
+    """'ETC 250,000–350,000 USD/yr (confidence 65%)' or 'ETC not estimated'."""
+    lo, hi = assessment.etc_min, assessment.etc_max
+    if lo is None and hi is None:
+        return "ETC not estimated"
+    if lo is not None and hi is not None and lo != hi:
+        amount = f"{lo:,.0f}–{hi:,.0f}"
+    else:
+        amount = f"{(lo if lo is not None else hi):,.0f}"
+    text = f"ETC {amount} USD/yr"
+    if assessment.etc_confidence is not None:
+        text += f" (confidence {assessment.etc_confidence}%)"
+    return text
 
 
 def _sorted_by_max_salary(jobs: list[Job]) -> list[Job]:
@@ -150,7 +225,7 @@ def _sorted_by_max_salary(jobs: list[Job]) -> list[Job]:
 
 
 def digest_bodies(groups: dict[str, list[Job]],
-                  graded: dict[str, tuple[str, str]]) -> tuple[str, str]:
+                  graded: dict[str, Assessment]) -> tuple[str, str]:
     """Plain-text and HTML digest bodies, one section per category."""
     text_parts, html_parts = [], []
     for category in CATEGORIES:
@@ -166,14 +241,18 @@ def digest_bodies(groups: dict[str, list[Job]],
         for job in jobs:
             unlisted = job.min_amount is None and job.max_amount is None
             summary = f"{location_str(job)} — {salary_str(job, unlisted)} — via {job.site}"
-            reason = graded.get(job.id, ("", ""))[1]
+            assessment = graded.get(job.id, Assessment())
+            etc_line = etc_str(assessment)
+            if assessment.etc_note:
+                etc_line += f" — {assessment.etc_note}"
             text_parts.append(f"- {job.title} @ {job.company} — {summary}\n"
-                              f"  {reason}\n  {job.url}\n")
+                              f"  {assessment.reason}\n  {etc_line}\n  {job.url}\n")
             html_parts.append(
                 f'<li><a href="{html.escape(job.url or "")}">'
                 f"{html.escape(job.title)} @ {html.escape(job.company)}</a>"
                 f" — {html.escape(summary)}<br>"
-                f"<em>{html.escape(reason)}</em></li>")
+                f"<em>{html.escape(assessment.reason)}</em><br>"
+                f"{html.escape(etc_line)}</li>")
         html_parts.append("</ul>")
     text = "\n".join(text_parts)
     body = "<html><body>" + "\n".join(html_parts) + "</body></html>"
@@ -218,7 +297,7 @@ def send_digest(cfg: AppConfig, store: Store, config_dir: Path) -> DigestResult:
                               cfg.digest.model, cfg.anthropic_api_key)
     groups: dict[str, list[Job]] = {c: [] for c in CATEGORIES}
     for job in jobs:
-        category = graded.get(job.id, ("none", ""))[0]
+        category = graded.get(job.id, Assessment()).category
         groups[category].append(job)
     for category in CATEGORIES:
         groups[category] = _sorted_by_max_salary(groups[category])
