@@ -307,6 +307,190 @@ class TestConfigPage:
         assert digest_scheduler.triggered == 1
 
 
+class TestTailorRoutes:
+    def _seed_job(self, db_path, i=1):
+        store = Store(db_path)
+        store.mark_matched(Match(_job(i, description="K8s, Python, SLOs")))
+        store.close()
+
+    def _stub_runner(self, monkeypatch):
+        calls = []
+
+        async def fake_run(app, row_id, job_id):
+            calls.append((row_id, job_id))
+
+        monkeypatch.setattr("jobfinder.web.routes._run_tailor", fake_run)
+        return calls
+
+    def test_tailor_creates_pending_row_and_cell(self, tmp_path, monkeypatch):
+        calls = self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        resp = client.post("/tailor", data={"job_id": "li-1"})
+        assert resp.status_code == 200
+        assert "tailoring…" in resp.text
+        store = Store(db_path)
+        assert store.latest_tailored("li-1")["status"] == "pending"
+        assert calls and calls[0][1] == "li-1"
+
+    def test_duplicate_click_adds_no_row(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        client.post("/tailor", data={"job_id": "li-1"})
+        client.post("/tailor", data={"job_id": "li-1"})
+        store = Store(db_path)
+        count = store._conn.execute(
+            "SELECT COUNT(*) FROM tailored_resumes").fetchone()[0]
+        assert count == 1
+
+    def test_unknown_job_404(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, _, _ = _client(tmp_path)
+        assert client.post("/tailor", data={"job_id": "nope"}).status_code == 404
+
+    def test_status_partial_shows_view_when_done(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")
+        store.finish_tailored(rid, markdown="# Tailored")
+        store.close()
+        body = client.get("/tailor/status", params={"job_id": "li-1"}).text
+        assert f'href="/resumes/{rid}"' in body
+        assert "↻" in body  # regenerate button
+
+    def test_status_partial_shows_retry_on_error(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        store = Store(db_path)
+        store.finish_tailored(store.create_tailored("li-1"), error="boom")
+        store.close()
+        body = client.get("/tailor/status", params={"job_id": "li-1"}).text
+        assert "retry" in body and "boom" in body
+
+    def test_view_resume_renders_template(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")
+        store.finish_tailored(rid, markdown="# Eric\n\n- **SRE** things")
+        store.close()
+        resp = client.get(f"/resumes/{rid}")
+        assert resp.status_code == 200
+        assert "<h1>Eric</h1>" in resp.text
+        assert "<strong>SRE</strong>" in resp.text
+        assert "{{" not in resp.text  # all placeholders substituted
+
+    def test_view_pending_or_unknown_404(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")  # still pending
+        store.close()
+        assert client.get(f"/resumes/{rid}").status_code == 404
+        assert client.get("/resumes/99999").status_code == 404
+
+    def test_markdown_download(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")
+        store.finish_tailored(rid, markdown="# Tailored MD")
+        store.close()
+        resp = client.get(f"/resumes/{rid}.md")
+        assert resp.status_code == 200
+        assert resp.text == "# Tailored MD"
+        cd = resp.headers["content-disposition"]
+        assert cd.startswith("attachment;") and cd.endswith('.md"')
+
+    def test_jobs_table_shows_tailor_button(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, _, db_path, _ = _client(tmp_path)
+        self._seed_job(db_path)
+        body = client.get("/jobs?window=all").text
+        assert "<th>Resume</th>" in body
+        assert 'hx-post="/tailor"' in body
+
+    def test_startup_sweeps_stale_pending(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        db_path = tmp_path / "test.db"
+        _write_config(config_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")  # orphaned by a "previous run"
+        store.close()
+        app = create_app(config_path=config_path, db_path=db_path,
+                         scheduler=StubScheduler(),
+                         digest_scheduler=StubScheduler())
+        with TestClient(app):  # lifespan runs the sweep
+            pass
+        store = Store(db_path)
+        row = store.get_tailored(rid)
+        assert row["status"] == "error"
+        assert "restart" in row["error"]
+
+    def test_run_tailor_writes_done_row(self, tmp_path, monkeypatch):
+        # exercise the real background body with a fake Claude call
+        import asyncio
+        from types import SimpleNamespace as NS
+        import jobfinder.web.routes as routes
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path)
+        (tmp_path / "resume.md").write_text("# Eric — SRE")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        db_path = tmp_path / "test.db"
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")
+        store.close()
+        monkeypatch.setattr(routes, "tailor_resume",
+                            lambda resume, job, model, key: "# TAILORED")
+        app = NS(state=NS(config_path=config_path, db_path=db_path))
+        asyncio.run(routes._run_tailor(app, rid, "li-1"))
+        store = Store(db_path)
+        row = store.get_tailored(rid)
+        assert row["status"] == "done" and row["markdown"] == "# TAILORED"
+
+    def test_run_tailor_records_error(self, tmp_path, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace as NS
+        import jobfinder.web.routes as routes
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path)
+        (tmp_path / "resume.md").write_text("# Eric")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        db_path = tmp_path / "test.db"
+        self._seed_job(db_path)
+        store = Store(db_path)
+        rid = store.create_tailored("li-1")
+        store.close()
+
+        def boom(*a, **k):
+            raise RuntimeError("api exploded")
+
+        monkeypatch.setattr(routes, "tailor_resume", boom)
+        app = NS(state=NS(config_path=config_path, db_path=db_path))
+        asyncio.run(routes._run_tailor(app, rid, "li-1"))
+        store = Store(db_path)
+        row = store.get_tailored(rid)
+        assert row["status"] == "error" and "api exploded" in row["error"]
+
+    def test_save_tailor_config_round_trips(self, tmp_path, monkeypatch):
+        self._stub_runner(monkeypatch)
+        client, config_path, _, _ = _client(tmp_path)
+        resp = client.post("/config/tailor", data={
+            "template_path": "my-template.html", "model": "claude-opus-4-8",
+        }, follow_redirects=False)
+        assert resp.status_code == 303
+        raw = yaml.safe_load(config_path.read_text())
+        assert raw["tailor"]["template_path"] == "my-template.html"
+
+
 class TestDigestConfigPage:
     def test_save_digest_settings_round_trips(self, tmp_path):
         client, config_path, _, _ = _client(tmp_path)

@@ -26,6 +26,7 @@
       {{ th('site', 'Site') }}
       {{ th('posted', 'Posted', 'desc') }}
       {{ th('matched', 'Matched', 'desc') }}
+      <th>Resume</th>
     </tr>
   </thead>
   <tbody>
@@ -39,6 +40,9 @@
       <td>{{ job.site }}</td>
       <td>{{ job.date_posted or '—' }}</td>
       <td title="{{ job.matched_at }}">{{ job.matched_at|rel_time }}</td>
+      {% with job_id = job.id, resume = job.resume %}
+      {% include "_resume_cell.html" %}
+      {% endwith %}
     </tr>
   {% endfor %}
   </tbody>

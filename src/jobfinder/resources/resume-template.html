@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resume — {{job_title}} @ {{company}}</title>
+<style>
+  /* jobfinder resume template — edit freely; {{resume}} below is replaced
+     with the tailored resume rendered from Markdown. Available placeholders:
+     {{resume}} (required), {{job_title}}, {{company}}, {{date}}. */
+  :root {
+    --ink: #1a1c20;
+    --muted: #5c6470;
+    --accent: #1f4e79;
+    --rule: #d5d9df;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #eceef1;
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+  }
+  .page {
+    max-width: 8.5in;
+    margin: 1rem auto;
+    padding: 0.6in;
+    background: #fff;
+    box-shadow: 0 1px 6px rgba(0,0,0,.18);
+  }
+  .resume h1 {
+    font-size: 20pt;
+    margin: 0 0 2pt;
+    letter-spacing: 0.02em;
+  }
+  /* Contact line: the paragraph immediately after the name */
+  .resume h1 + p,
+  .resume .contact {
+    color: var(--muted);
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 9pt;
+    margin: 2pt 0 10pt;
+  }
+  .resume .contact a { color: var(--muted); }
+  .resume .contact .sep {
+    color: var(--accent);
+    padding: 0 0.35em;
+    font-weight: bold;
+  }
+  .resume h2 {
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 2pt;
+    margin: 18pt 0 7pt;
+  }
+  .resume h3 { font-size: 11pt; margin: 11pt 0 2pt; }
+  .resume p { margin: 2pt 0; }
+  .resume strong { color: var(--ink); }
+  .resume ul { margin: 3pt 0 6pt; padding-left: 16pt; }
+  .resume li { margin: 1.5pt 0; }
+  .resume a { color: var(--accent); text-decoration: none; }
+
+  .toolbar {
+    max-width: 8.5in;
+    margin: 0.75rem auto 0;
+    padding: 0 0.25rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .toolbar button {
+    font: inherit;
+    padding: 0.3rem 0.9rem;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+  }
+  @media print {
+    body { background: #fff; }
+    .page { margin: 0; padding: 0; box-shadow: none; max-width: none; }
+    .toolbar { display: none; }
+  }
+  @page { size: letter; margin: 0.6in; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span>Tailored for {{job_title}} @ {{company}} — generated {{date}}</span>
+  <button onclick="window.print()">Print / Save as PDF</button>
+</div>
+<div class="page">
+  <div class="resume">
+{{resume}}
+  </div>
+</div>
+</body>
+</html>

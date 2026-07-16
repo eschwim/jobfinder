@@ -189,6 +189,54 @@ class TestRuns:
         assert store.last_run()["error"] == "boom"
 
 
+class TestTailoredResumes:
+    def test_lifecycle_pending_to_done(self):
+        store = Store(":memory:")
+        rid = store.create_tailored("li-1")
+        row = store.get_tailored(rid)
+        assert row["status"] == "pending" and row["job_id"] == "li-1"
+        store.finish_tailored(rid, markdown="# Tailored")
+        row = store.get_tailored(rid)
+        assert row["status"] == "done"
+        assert row["markdown"] == "# Tailored"
+        assert row["finished_at"] is not None
+
+    def test_error_recorded(self):
+        store = Store(":memory:")
+        rid = store.create_tailored("li-1")
+        store.finish_tailored(rid, error="boom")
+        row = store.get_tailored(rid)
+        assert row["status"] == "error" and row["error"] == "boom"
+
+    def test_latest_is_newest_row(self):
+        store = Store(":memory:")
+        first = store.create_tailored("li-1")
+        store.finish_tailored(first, markdown="v1")
+        second = store.create_tailored("li-1")
+        assert store.latest_tailored("li-1")["id"] == second
+
+    def test_latest_map_one_row_per_job(self):
+        store = Store(":memory:")
+        store.create_tailored("li-1")
+        newest_1 = store.create_tailored("li-1")
+        newest_2 = store.create_tailored("li-2")
+        result = store.latest_tailored_map(["li-1", "li-2", "li-3"])
+        assert result["li-1"]["id"] == newest_1
+        assert result["li-2"]["id"] == newest_2
+        assert "li-3" not in result
+        assert store.latest_tailored_map([]) == {}
+
+    def test_fail_pending_flips_only_pending(self):
+        store = Store(":memory:")
+        done = store.create_tailored("li-1")
+        store.finish_tailored(done, markdown="ok")
+        pending = store.create_tailored("li-2")
+        assert store.fail_pending_tailored("interrupted") == 1
+        assert store.get_tailored(done)["status"] == "done"
+        row = store.get_tailored(pending)
+        assert row["status"] == "error" and row["error"] == "interrupted"
+
+
 class TestSiteHealth:
     def test_site_health_lists_streaks(self):
         store = Store(":memory:")

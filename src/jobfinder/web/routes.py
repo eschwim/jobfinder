@@ -3,26 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..config import (
     KNOWN_CHANNELS,
     ConfigError,
+    TailorConfig,
     load_config,
     load_raw_config,
     save_config,
 )
+from ..digest import _row_job
 from ..filters import Job, yearly_salary_range
 from ..notify import Notifier, NotifyError, build_channels, location_str
 from ..store import Store
+from ..tailor import TailorError, render_resume_html, resolve_template, tailor_resume
 from .deps import get_store
+
+log = logging.getLogger("jobfinder.web")
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -66,6 +73,7 @@ def _row_display(row: sqlite3.Row) -> dict:
               salary_source=row["salary_source"], date_posted=row["date_posted"])
     salary_min, salary_max = yearly_salary_range(job)
     return {
+        "id": job.id,
         "title": job.title, "company": job.company, "url": job.url,
         "site": job.site, "location": location_str(job),
         "salary_min": salary_min, "salary_max": salary_max,
@@ -73,6 +81,7 @@ def _row_display(row: sqlite3.Row) -> dict:
         "salary_max_str": _salary_amount_str(salary_max, job.currency),
         "salary_source": job.salary_source,
         "matched_at": row["matched_at"], "date_posted": row["date_posted"],
+        "resume": None,  # latest tailored_resumes row, filled in _jobs_context
     }
 
 
@@ -119,6 +128,9 @@ def _jobs_context(request: Request, store: Store, window: str,
     since = None if hours is None else datetime.now(timezone.utc) - timedelta(hours=hours)
     rows = store.recent_matches(since=since)
     jobs = _sort_jobs([_row_display(r) for r in rows], sort, direction)
+    tailored = store.latest_tailored_map([j["id"] for j in jobs])
+    for j in jobs:
+        j["resume"] = tailored.get(j["id"])
     return {"jobs": jobs, "window": window, "windows": list(WINDOWS),
             "sort": sort, "dir": direction}
 
@@ -142,6 +154,102 @@ async def jobs_table(request: Request, window: str = "24h",
                      store: Store = Depends(get_store)):
     return templates.TemplateResponse(request, "_jobs_table.html",
                                       _jobs_context(request, store, window, sort, dir))
+
+
+# --- resume tailoring ---------------------------------------------------------
+
+def _resume_cell(request: Request, store: Store, job_id: str):
+    return templates.TemplateResponse(request, "_resume_cell.html", {
+        "job_id": job_id, "resume": store.latest_tailored(job_id)})
+
+
+def _tailor_sync(config_path: Path, db_path: Path, row_id: int, job_id: str) -> None:
+    """Blocking body of one tailoring task; every failure lands in the DB row."""
+    store = Store(db_path)
+    try:
+        try:
+            cfg = load_config(config_path)
+            if not cfg.anthropic_api_key:
+                raise TailorError("ANTHROPIC_API_KEY is not set in the environment")
+            resume_path = Path(cfg.digest.resume_path)
+            if not resume_path.is_absolute():
+                resume_path = config_path.resolve().parent / resume_path
+            if not resume_path.is_file():
+                raise TailorError(f"resume not found: {resume_path}")
+            job_row = store.get_job(job_id)
+            if job_row is None:
+                raise TailorError(f"job {job_id} not found")
+            markdown = tailor_resume(resume_path.read_text(), _row_job(job_row),
+                                     cfg.tailor.model, cfg.anthropic_api_key)
+            store.finish_tailored(row_id, markdown=markdown)
+            log.info("tailored resume ready for %s", job_id)
+        except (TailorError, ConfigError) as exc:
+            log.warning("tailoring failed for %s: %s", job_id, exc)
+            store.finish_tailored(row_id, error=str(exc))
+        except Exception as exc:  # never leave a pending row behind
+            log.exception("tailoring crashed for %s", job_id)
+            store.finish_tailored(row_id, error=f"unexpected error: {exc}")
+    finally:
+        store.close()
+
+
+async def _run_tailor(app, row_id: int, job_id: str) -> None:
+    await asyncio.to_thread(_tailor_sync, app.state.config_path,
+                            app.state.db_path, row_id, job_id)
+
+
+@router.post("/tailor")
+async def start_tailor(request: Request, job_id: str = Form(...),
+                       store: Store = Depends(get_store)):
+    latest = store.latest_tailored(job_id)
+    if latest is None or latest["status"] != "pending":  # pending: idempotent
+        if store.get_job(job_id) is None:
+            raise HTTPException(404, "unknown job")
+        row_id = store.create_tailored(job_id)
+        task = asyncio.create_task(_run_tailor(request.app, row_id, job_id))
+        tasks = request.app.state.tailor_tasks
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+    return _resume_cell(request, store, job_id)
+
+
+@router.get("/tailor/status")
+async def tailor_status(request: Request, job_id: str,
+                        store: Store = Depends(get_store)):
+    return _resume_cell(request, store, job_id)
+
+
+@router.get("/resumes/{rid}.md")
+async def download_resume(rid: int, store: Store = Depends(get_store)):
+    row = store.get_tailored(rid)
+    if row is None or row["status"] != "done" or not row["markdown"]:
+        raise HTTPException(404)
+    job_row = store.get_job(row["job_id"])
+    stem = f"resume-{job_row['company']}-{job_row['title']}" if job_row else "resume"
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-")[:80] + ".md"
+    return PlainTextResponse(row["markdown"], headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/resumes/{rid}", response_class=HTMLResponse)
+async def view_resume(request: Request, rid: int,
+                      store: Store = Depends(get_store)):
+    row = store.get_tailored(rid)
+    if row is None or row["status"] != "done" or not row["markdown"]:
+        raise HTTPException(404)
+    job_row = store.get_job(row["job_id"])
+    job = (_row_job(job_row) if job_row
+           else Job(id=row["job_id"], title="", company=""))
+    config_path = request.app.state.config_path
+    try:
+        tailor_cfg = load_config(config_path).tailor
+    except ConfigError:
+        tailor_cfg = TailorConfig()
+    template = resolve_template(tailor_cfg, config_path.resolve().parent)
+    try:
+        return HTMLResponse(render_resume_html(row["markdown"], template, job))
+    except TailorError as exc:  # e.g. user template lost its {{resume}}
+        raise HTTPException(422, str(exc))
 
 
 # --- config -----------------------------------------------------------------
@@ -171,6 +279,7 @@ def _config_page(request: Request, raw: dict, error: str | None = None,
         "notify": notify,
         "health_channels": health_channels,
         "digest": raw.get("digest") or {},
+        "tailor": raw.get("tailor") or {},
         "repost_window_days": raw.get("repost_window_days", 60),
         "poll_interval_minutes": raw.get("poll_interval_minutes", 120),
         "remote_verification_policy": raw.get("remote_verification_policy", "fail_closed"),
@@ -313,6 +422,19 @@ async def save_digest_config(request: Request):
     if form.get("resume_path", "").strip():
         digest["resume_path"] = form.get("resume_path").strip()
     raw["digest"] = digest
+    return _save(request, raw)
+
+
+@router.post("/config/tailor")
+async def save_tailor_config(request: Request):
+    raw = _raw_config(request)
+    form = await request.form()
+    tailor = raw.get("tailor") or {}
+    if form.get("template_path", "").strip():
+        tailor["template_path"] = form.get("template_path").strip()
+    if form.get("model", "").strip():
+        tailor["model"] = form.get("model").strip()
+    raw["tailor"] = tailor
     return _save(request, raw)
 
 

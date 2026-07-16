@@ -65,6 +65,15 @@ digest:
   model: claude-opus-4-8
   resume_path: resume.md
 
+# Per-job tailored resume generation ("Tailor" button in the jobs UI): rewrites
+# digest.resume_path for a specific posting via the Claude API (strictly from
+# the resume's real content) and renders it through an HTML template for
+# print-to-PDF. template_path resolves relative to this file's directory; if
+# the file is missing, a built-in default template is used.
+tailor:
+  template_path: resume-template.html
+  model: claude-opus-4-8
+
 notify:
   # Per-run match alerts. pushover needs PUSHOVER_* in .env; email needs SMTP_*.
   # Leave empty ([]) for digest-only — no per-run alerts.

@@ -152,6 +152,24 @@ config.yaml are not preserved when saving from this page.</p>
 </section>
 
 <section>
+  <h2>Resume tailoring</h2>
+  <form method="post" action="/config/tailor" class="card">
+    <p class="note">The "tailor" button on the jobs page rewrites your resume
+    (digest's resume file) for a specific posting — strictly from its real
+    content — and renders it through this HTML template for print-to-PDF. If
+    the template file doesn't exist, a built-in default is used.</p>
+    <div class="grid">
+      <label>Template path (relative to config dir)
+        <input name="template_path"
+               value="{{ tailor.get('template_path', 'resume-template.html') }}"></label>
+      <label>Claude model
+        <input name="model" value="{{ tailor.get('model', 'claude-opus-4-8') }}"></label>
+    </div>
+    <div class="actions"><button type="submit">Save tailoring settings</button></div>
+  </form>
+</section>
+
+<section>
   <h2>General</h2>
   <form method="post" action="/config/general" class="card">
     <div class="grid">

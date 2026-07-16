@@ -111,6 +111,22 @@ class TestSaveConfig:
         assert "# a comment" not in path.read_text()
 
 
+class TestTailorConfig:
+    def test_defaults(self):
+        cfg = parse_config(_raw())
+        assert cfg.tailor.template_path == "resume-template.html"
+        assert cfg.tailor.model == "claude-opus-4-8"
+
+    def test_round_trip(self):
+        cfg = parse_config(_raw(tailor={"template_path": "my.html",
+                                        "model": "claude-opus-4-8"}))
+        assert cfg.tailor.template_path == "my.html"
+
+    def test_unknown_key_rejected(self):
+        with pytest.raises(ConfigError, match="tailor section is invalid"):
+            parse_config(_raw(tailor={"nope": 1}))
+
+
 class TestRemoteVerificationPolicy:
     def test_default_fail_closed(self):
         assert parse_config(_raw()).remote_verification_policy == "fail_closed"

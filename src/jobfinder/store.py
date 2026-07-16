@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS digests (
     none     INTEGER,
     error    TEXT
 );
+CREATE TABLE IF NOT EXISTS tailored_resumes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL,
+    finished_at TEXT,
+    markdown    TEXT,
+    error       TEXT
+);
+CREATE INDEX IF NOT EXISTS tailored_resumes_job ON tailored_resumes (job_id);
 """
 
 # Columns added after the initial release, applied to pre-existing DBs with
@@ -174,6 +184,10 @@ class Store:
         )
         self._conn.commit()
 
+    def get_job(self, job_id: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM seen_jobs WHERE id = ?", (job_id,)).fetchone()
+
     def recent_matches(self, since: datetime | None = None) -> list[sqlite3.Row]:
         """Matched jobs, newest first; `since` bounds matched_at (None = all)."""
         if since is None:
@@ -216,6 +230,52 @@ class Store:
     def last_run(self) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+
+    def create_tailored(self, job_id: str) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO tailored_resumes (job_id, status, created_at)"
+            " VALUES (?, 'pending', ?)", (job_id, _utcnow()))
+        self._conn.commit()
+        return cur.lastrowid
+
+    def finish_tailored(self, row_id: int, markdown: str | None = None,
+                        error: str | None = None) -> None:
+        status = "error" if error else "done"
+        self._conn.execute(
+            "UPDATE tailored_resumes SET status = ?, finished_at = ?,"
+            " markdown = ?, error = ? WHERE id = ?",
+            (status, _utcnow(), markdown, error, row_id))
+        self._conn.commit()
+
+    def get_tailored(self, row_id: int) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM tailored_resumes WHERE id = ?", (row_id,)).fetchone()
+
+    def latest_tailored(self, job_id: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM tailored_resumes WHERE job_id = ?"
+            " ORDER BY id DESC LIMIT 1", (job_id,)).fetchone()
+
+    def latest_tailored_map(self, job_ids: list[str]) -> dict[str, sqlite3.Row]:
+        """Newest tailored-resume row per job, in one query (jobs-table view)."""
+        if not job_ids:
+            return {}
+        marks = ",".join("?" * len(job_ids))
+        rows = self._conn.execute(
+            f"SELECT t.* FROM tailored_resumes t"
+            f" JOIN (SELECT job_id, MAX(id) AS max_id FROM tailored_resumes"
+            f"       WHERE job_id IN ({marks}) GROUP BY job_id) latest"
+            f" ON t.id = latest.max_id", job_ids).fetchall()
+        return {row["job_id"]: row for row in rows}
+
+    def fail_pending_tailored(self, reason: str) -> int:
+        """Mark all pending rows as errors (called at app startup: a pending
+        row can't have a live task after a restart)."""
+        cur = self._conn.execute(
+            "UPDATE tailored_resumes SET status = 'error', finished_at = ?,"
+            " error = ? WHERE status = 'pending'", (_utcnow(), reason))
+        self._conn.commit()
+        return cur.rowcount
 
     def record_digest(self, matches: int, strong: int, weak: int, none: int,
                       error: str | None = None) -> None:

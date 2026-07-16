@@ -130,6 +130,20 @@ button {
 }
 button:hover { filter: brightness(1.1); }
 button.danger { background: transparent; border-color: var(--bad); color: var(--bad); }
+button.mini, a.mini {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.mini:hover { filter: brightness(1.1); text-decoration: none; }
+td.resume-cell { white-space: nowrap; }
+td.resume-cell .muted { color: var(--muted); font-size: 0.85rem; }
 
 .banner { border-radius: 6px; padding: 0.6rem 0.9rem; margin: 0.75rem 0; }
 .banner.error { background: var(--error-bg); color: var(--bad); }

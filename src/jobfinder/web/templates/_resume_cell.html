@@ -1,0 +1,22 @@
+<td class="resume-cell"
+    {% if resume and resume['status'] == 'pending' %}
+    hx-get="/tailor/status?job_id={{ job_id|urlencode }}"
+    hx-trigger="every 3s" hx-swap="outerHTML"
+    {% endif %}>
+{% if resume and resume['status'] == 'pending' %}
+  <span class="muted">tailoring…</span>
+{% elif resume and resume['status'] == 'done' %}
+  <a class="mini" href="/resumes/{{ resume['id'] }}" target="_blank" rel="noopener">view</a>
+  <button class="mini" title="regenerate" hx-post="/tailor"
+          hx-vals='{"job_id": {{ job_id|tojson }}}'
+          hx-target="closest td" hx-swap="outerHTML">↻</button>
+{% else %}
+  <button class="mini" hx-post="/tailor"
+          hx-vals='{"job_id": {{ job_id|tojson }}}'
+          hx-target="closest td" hx-swap="outerHTML">
+    {{ 'retry' if resume else 'tailor' }}</button>
+  {% if resume and resume['status'] == 'error' %}
+  <span class="bad" title="{{ resume['error'] }}">⚠</span>
+  {% endif %}
+{% endif %}
+</td>

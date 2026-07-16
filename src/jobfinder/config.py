@@ -80,6 +80,17 @@ class DigestConfig:
 
 
 @dataclass
+class TailorConfig:
+    """Per-job tailored resume generation (on-demand from the web UI).
+
+    The resume source is digest.resume_path; this only configures the output
+    template and model. template_path is resolved relative to the config
+    file's directory; if the file doesn't exist, a packaged default is used."""
+    template_path: str = "resume-template.html"
+    model: str = "claude-opus-4-8"
+
+
+@dataclass
 class AppConfig:
     searches: list[SearchSpec]
     filters: Filters
@@ -87,6 +98,7 @@ class AppConfig:
     pushover_token: str | None
     pushover_user: str | None
     digest: DigestConfig = field(default_factory=DigestConfig)
+    tailor: TailorConfig = field(default_factory=TailorConfig)
     anthropic_api_key: str | None = None
     # Suppress reposts of an already-alerted role (same company+title) for this
     # many days after its last sighting; 0 disables repost detection.
@@ -230,6 +242,11 @@ def parse_config(raw: dict) -> AppConfig:
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(digest.time)):
         raise ConfigError(f"digest.time must be HH:MM (24h), got {digest.time!r}")
 
+    try:
+        tailor = TailorConfig(**(raw.get("tailor") or {}))
+    except TypeError as exc:
+        raise ConfigError(f"tailor section is invalid: {exc}") from exc
+
     return AppConfig(
         searches=searches,
         filters=filters,
@@ -238,6 +255,7 @@ def parse_config(raw: dict) -> AppConfig:
         poll_interval_minutes=poll_interval_minutes,
         remote_verification_policy=remote_verification_policy,
         digest=digest,
+        tailor=tailor,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
         pushover_token=os.environ.get("PUSHOVER_TOKEN"),
         pushover_user=os.environ.get("PUSHOVER_USER"),
